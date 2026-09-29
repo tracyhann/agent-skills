@@ -1,6 +1,7 @@
 ---
 name: manuscript-review-annotator
 description: Review a research manuscript (Word .docx, LaTeX source or PDF) thoroughly and deliver the review as an interactive annotation page — the full paper with figures and tables, every issue pre-highlighted in the text or boxed on the figure, editable and shareable with co-authors — plus clean exports and a standalone read-only report. Use this whenever someone uploads a paper draft and asks to check it for issues or inconsistencies, wants review comments placed on the manuscript, wants a page to highlight, box or comment on a paper with co-authors, or wants to clean up, relabel, export or snapshot the notes from such a page, even if they never say "annotation", "artifact" or "skill".
+license: MIT
 compatibility: Python 3.10+ with pandoc, beautifulsoup4, lxml, pillow, pdfplumber and pypdfium2 (see requirements.txt); playwright for smoke tests. The live page needs the Artifact publishing tool (claude.ai); elsewhere deliver the standalone report.
 metadata:
   version: "1.1.0"

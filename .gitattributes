@@ -1,0 +1,10 @@
+# Normalise line endings; scripts and templates must stay LF for the skills to run anywhere.
+* text=auto eol=lf
+
+# Binary fixtures and assets
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+*.docx binary
+*.zip  binary
+*.skill binary

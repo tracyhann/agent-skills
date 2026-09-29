@@ -1,8 +1,12 @@
 # agent-skills
 
-Agent Skills for research work: packaged instructions, scripts and templates that Claude loads
-when a task calls for them. Each skill lives in its own folder under [`skills/`](skills/) and works
-in Claude Code, claude.ai and the Claude API.
+[![CI](https://github.com/tracyhann/agent-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/tracyhann/agent-skills/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+A library of [Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)
+for research work: packaged instructions, scripts and templates that Claude loads when a task
+calls for them. Each skill lives in its own folder under [`skills/`](skills/) and works in
+Claude Code, claude.ai and the Claude API.
 
 ## Skills
 
@@ -13,7 +17,8 @@ in Claude Code, claude.ai and the Claude API.
 <!-- skills-index:end -->
 
 The table and the Claude Code marketplace file are generated from each skill's `SKILL.md`
-(`python tools/build_index.py`); edit the skill, not the table.
+(`python tools/build_index.py`); edit the skill, not the table. Each skill's history is in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -27,13 +32,18 @@ Add this repository as a plugin marketplace, then install the skills you want:
 ```
 
 Or copy a skill folder into `~/.claude/skills/` (all your projects) or `.claude/skills/`
-(one project). See the [Claude Code skills docs](https://docs.claude.com/en/docs/claude-code/skills).
+(one project). See [Claude Code skills](https://code.claude.com/docs/en/skills).
 
 ### claude.ai
 
-Download a `.skill` file from [Releases](https://github.com/tracyhann/agent-skills/releases)
-(or build one with `python tools/package_skills.py`) and upload it under Skills in your
-claude.ai settings.
+Download `<skill-name>.skill` from [Releases](https://github.com/tracyhann/agent-skills/releases)
+(or build it with `python tools/package_skills.py`) and upload it under Skills in your
+claude.ai settings. Code execution must be enabled.
+
+### Claude API
+
+Upload the skill folder through the Skills API and use it with the code execution tool. See
+[Using Agent Skills with the API](https://platform.claude.com/docs/en/build-with-claude/skills-guide).
 
 ### Dependencies
 
@@ -47,35 +57,49 @@ python -m playwright install chromium     # optional, for smoke tests
 # plus pandoc: brew install pandoc  |  sudo apt-get install pandoc
 ```
 
+### Updating
+
+- Claude Code: `claude plugin marketplace update tracyhann-agent-skills`, then
+  `claude plugin update manuscript-review-annotator@tracyhann-agent-skills`.
+- claude.ai: download the newer `.skill` from Releases and upload it again.
+- Copied folders: pull this repository and copy the folder again.
+
 ## Repository layout
 
 ```
 agent-skills/
 ├── skills/                     one folder per skill (this is what gets installed)
 │   └── <skill-name>/
-│       ├── SKILL.md            instructions + frontmatter (name, description, metadata.version)
+│       ├── SKILL.md            instructions + frontmatter (name, description, license, metadata.version)
 │       ├── scripts/            code the skill runs
 │       ├── references/         detail loaded only when a step needs it
 │       ├── assets/             templates and other files used in outputs
 │       └── requirements.txt    Python dependencies, if any
 ├── tests/<skill-name>/         end-to-end tests and small synthetic fixtures
-├── tools/                      repo tooling: validate, index, package
+├── tools/                      repo tooling: scaffold, validate, index, package, release notes
 ├── .claude-plugin/             Claude Code marketplace definition (generated plugin list)
-├── .github/workflows/ci.yml    validation, tests and packaging on every push
-├── CHANGELOG.md
-└── CONTRIBUTING.md
+├── .github/                    CI and release workflows, issue and pull request templates
+├── CHANGELOG.md                per-skill version history
+├── CONTRIBUTING.md             how to add, update and release skills
+└── LICENSE                     MIT
 ```
 
 ## Maintaining
 
 ```bash
-python tools/validate_skills.py     # frontmatter and structure rules
-python tools/build_index.py         # refresh the table above and the marketplace file
-pytest -q tests                     # end-to-end tests
-python tools/package_skills.py      # dist/<name>.skill for claude.ai
+python tools/new_skill.py <skill-name>   # scaffold a new skill
+python tools/validate_skills.py          # frontmatter, structure and CHANGELOG rules
+python tools/build_index.py              # refresh the table above and the marketplace file
+pytest -q tests                          # end-to-end tests
+python tools/package_skills.py           # dist/<name>.skill for claude.ai
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for adding a skill, versioning and releases.
+Versioning, conventions for writing skills, and the release process (push a
+`<skill-name>-v<version>` tag) are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Never commit manuscripts, review notes or other unpublished material: test fixtures must be
 synthetic.
+
+## License
+
+[MIT](LICENSE)

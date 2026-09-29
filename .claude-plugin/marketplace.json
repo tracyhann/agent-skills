@@ -16,7 +16,10 @@
       "strict": false,
       "skills": [
         "./skills/manuscript-review-annotator"
-      ]
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/tracyhann/agent-skills/tree/main/skills/manuscript-review-annotator",
+      "repository": "https://github.com/tracyhann/agent-skills"
     }
   ]
 }

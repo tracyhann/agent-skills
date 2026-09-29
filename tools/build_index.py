@@ -13,6 +13,7 @@ from skill_meta import ROOT, skills
 README = ROOT / "README.md"
 MARKET = ROOT / ".claude-plugin" / "marketplace.json"
 START, END = "<!-- skills-index:start -->", "<!-- skills-index:end -->"
+REPO_URL = "https://github.com/tracyhann/agent-skills"
 
 
 def short(desc):
@@ -23,8 +24,19 @@ def short(desc):
 def table(items):
     rows = ["| Skill | Version | What it does |", "|---|---|---|"]
     for s in items:
-        rows.append(f"| [`{s["name"]}`](skills/{s["name"]}/SKILL.md) | {s['version']} | {short(s['description'])} |")
+        rows.append(f"| [`{s['name']}`](skills/{s['name']}/SKILL.md) | {s['version']} | {short(s['description'])} |")
     return "\n".join(rows)
+
+
+def plugin_entry(s):
+    """One Claude Code marketplace entry per skill; the entry is the plugin manifest (no plugin.json)."""
+    entry = {"name": s["name"], "description": short(s["description"]), "version": s["version"],
+             "source": "./", "strict": False, "skills": [f"./skills/{s['name']}"]}
+    if s["frontmatter"].get("license"):
+        entry["license"] = s["frontmatter"]["license"]
+    entry["homepage"] = f"{REPO_URL}/tree/main/skills/{s['name']}"
+    entry["repository"] = REPO_URL
+    return entry
 
 
 def main():
@@ -32,8 +44,7 @@ def main():
     readme = README.read_text()
     new_readme = re.sub(re.escape(START) + r".*?" + re.escape(END), f"{START}\n{table(items)}\n{END}", readme, flags=re.S)
     market = json.loads(MARKET.read_text())
-    market["plugins"] = [{"name": s["name"], "description": short(s["description"]), "version": s["version"],
-                          "source": "./", "strict": False, "skills": [f"./skills/{s['name']}"]} for s in items]
+    market["plugins"] = [plugin_entry(s) for s in items]
     new_market = json.dumps(market, indent=2, ensure_ascii=False) + "\n"
     if "--check" in sys.argv:
         stale = [p.name for p, old, new in ((README, readme, new_readme), (MARKET, MARKET.read_text(), new_market)) if old != new]
