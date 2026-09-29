@@ -8,7 +8,9 @@ Read the notes first with the Artifact tool:
 and save the listing it prints (the lines `- "r001" ... version 2`) to a text file,
 because write_db needs each document's version to pin its writes.
 
-1) Clean source of the open notes (Markdown for reading, JSON the tool can import):
+1) Clean source of the open notes (Markdown for reading, JSON the tool can import), each followed
+   by its reply thread (read the "replies" collection with the same out_dir; it is picked up from
+   the sibling _notes/replies folder, or pass --replies):
     python notes_ops.py clean DOC_DIR /mnt/user-data/outputs/_notes/annotations OUTBASE [--author-map "Claude review=cabbage"]
 
 2) Batched write_db payloads (<= 50 writes each), pinned with if_version:
@@ -17,6 +19,8 @@ because write_db needs each document's version to pin its writes.
    An empty old name, --relabel "=cabbage", signs only the notes Claude seeded without a signature
    (they show the page owner's account name); --relabel "cabbage=" returns them to that. Notes
    people made in the page under their account name are never touched by it.
+   Replies are signed the same way: run it on _notes/replies with --collection replies and that
+   collection's listing.
    Prints each batch as JSON to paste into Artifact write_db (db_op "batch", writes=...).
 Delete the temporary _notes folder afterwards.
 """
@@ -34,6 +38,24 @@ def load(src):
         return [json.loads(f.read_text()) for f in sorted(p.glob("*.json"))]
     d = json.loads(p.read_text())
     return d["annotations"] if isinstance(d, dict) else d
+
+
+def load_replies(a):
+    """Replies for clean(): --replies (folder or export), else the sibling _notes/replies folder,
+    else the notes export's own "replies"."""
+    src, p = a.replies, Path(a.notes)
+    if not src and p.is_dir():
+        root = p.parent if p.name == "annotations" else p
+        src = root / "replies" if (root / "replies").is_dir() else None
+    if not src:
+        src = p if p.is_file() else None
+    if not src:
+        return []
+    q = Path(src)
+    if q.is_dir():
+        return [json.loads(f.read_text()) for f in sorted(q.glob("*.json"))]
+    d = json.loads(q.read_text())
+    return d.get("replies", []) if isinstance(d, dict) else (d if a.replies else [])
 
 
 def clean(a):
@@ -69,7 +91,24 @@ def clean(a):
         if au in amap and (au or not m.get("byOwner")): m["author"] = amap[au]
         elif not au and m.get("byOwner") and "@owner" in amap: m["author"] = amap["@owner"]
         out.append(m)
-    Path(a.outbase + ".json").write_text(json.dumps({"format": "review-notes", "version": 1, "annotations": out}, ensure_ascii=False, indent=1))
+    ids = {n["id"] for n in out}
+    thread = {}
+    for r in sorted(load_replies(a), key=lambda r: (str(r.get("createdAt", "")), str(r.get("id", "")))):
+        if r.get("note") in ids:
+            thread.setdefault(r["note"], []).append(r)
+    rkeep = ["id", "note", "text", "author", "authorId", "byOwner", "createdAt", "updatedAt", "editedAt"]
+    replies = []
+    for n in out:
+        for r in thread.get(n["id"], []):
+            m = {k: r[k] for k in rkeep if k in r and r[k] is not None}
+            au = m.get("author", "")
+            if au in amap and (au or not m.get("byOwner")): m["author"] = amap[au]
+            elif not au and m.get("byOwner") and "@owner" in amap: m["author"] = amap["@owner"]
+            m["_by"] = m.get("author") or r.get("authorName") or ("page owner" if m.get("byOwner") else "")
+            replies.append(m)
+    Path(a.outbase + ".json").write_text(json.dumps({"format": "review-notes", "version": 3, "annotations": out,
+                                                     "replies": [{k: v for k, v in r.items() if k != "_by"} for r in replies]},
+                                                    ensure_ascii=False, indent=1))
     q = lambda s: (s or "").replace("\n", " ").strip()
     from collections import Counter
     cc = Counter(n["cat"] for n in out)
@@ -89,9 +128,12 @@ def clean(a):
         if n.get("suggestion"): md.append(f"Suggested: {q(n['suggestion'])}")
         by = n.get("author") or n.get("authorName") or ("page owner" if n.get("byOwner") else "")
         if by: md.append(f"_{by}_")
+        for r in (x for x in replies if x["note"] == n["id"]):
+            day = str(r.get("createdAt", ""))[:10]
+            md.append(f"> **{r['_by'] or 'unsigned'}**{' (' + day + ')' if day else ''}: {q(r.get('text'))}  ")
         md.append("")
     Path(a.outbase + ".md").write_text("\n".join(md))
-    print(f"wrote {a.outbase}.md and .json: {len(out)} open notes")
+    print(f"wrote {a.outbase}.md and .json: {len(out)} open notes, {len(replies)} replies")
 
 
 def batch(a):
@@ -135,6 +177,7 @@ if __name__ == "__main__":
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("clean"); c.add_argument("doc_dir"); c.add_argument("notes"); c.add_argument("outbase")
     c.add_argument("--author-map", action="append", default=[])
+    c.add_argument("--replies", help="replies folder or export; default: the sibling replies/ folder or the export's \"replies\"")
     b = sub.add_parser("batch"); b.add_argument("notes"); b.add_argument("--listing")
     b.add_argument("--delete-status"); b.add_argument("--relabel"); b.add_argument("--collection", default="annotations")
     a = ap.parse_args()

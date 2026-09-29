@@ -17,14 +17,19 @@ NOTES_DRAFT.json is a list. Each item is one of:
     {"cat": "blocker", "kind": "note", "comment": "..."}                         # not tied to any text
 "block" is only needed when the exact text occurs in more than one block; "occ" picks the
 n-th occurrence (0-based) inside the block when it repeats there.
+Any item may carry a reply thread, seeded into the page's `replies` collection:
+    "replies": [{"text": "...", "author": "Authors (rebuttal)"?, "date": "2026-07-28"?}, ...]
+A reply is signed with its "author", else --author, else (like notes) the page owner's account
+name. "date" orders and dates it (default: now).
 
 Writes to OUTDIR:
     seeds.json          resolved notes (ids r001...), in manuscript order
     notes/<id>.json     one file per note (write_db batch entries point at these)
-    batches/batch_N.json write_db "writes" arrays, at most 50 entries each
+    replies.json, replies/<id>.json   reply threads (ids r001-c1, ...), when the draft has any
+    batches/batch_N.json write_db "writes" arrays (notes, then replies), at most 50 entries each
 Exit code 1 if any anchor fails; fix the draft and rerun.
 """
-import argparse, json, sys
+import argparse, datetime, json, sys
 from pathlib import Path
 
 CATS = {"blocker", "numbers", "stats", "figures", "framing", "refs", "typos", "coauthor", "mine"}
@@ -63,6 +68,21 @@ def main():
              "author": d.get("author") or a.author}
         if not n["author"]:
             n["byOwner"] = True
+        thread = []
+        for k, r in enumerate(d.get("replies") or [], 1):
+            txt = (r.get("text") or "").strip() if isinstance(r, dict) else ""
+            if not txt:
+                errors.append(f"{tag}: reply {k} has no text"); continue
+            if len(txt) > 4000:
+                errors.append(f"{tag}: reply {k} is longer than 4000 characters"); continue
+            when = r.get("date") or ""
+            if when:
+                try:
+                    datetime.datetime.fromisoformat(when.replace("Z", "+00:00"))
+                except ValueError:
+                    errors.append(f"{tag}: reply {k} date {when!r} is not ISO (YYYY-MM-DD)"); continue
+            thread.append({"text": txt, "author": (r.get("author") or a.author).strip(), "date": when})
+        n["_replies"] = thread
         if d.get("kind") == "note":
             n.update(kind="note", block=None)
         elif "box" in d or "fig" in d:
@@ -125,19 +145,39 @@ def main():
         sys.exit(1)
 
     od = Path(a.outdir); (od / "notes").mkdir(parents=True, exist_ok=True); (od / "batches").mkdir(exist_ok=True)
-    now = "1970-01-01T00:00:00Z"
-    import datetime
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    base = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    now = base.strftime("%Y-%m-%dT%H:%M:%SZ")
+    replies = []
     for i, n in enumerate(out, 1):
         n.update(id=f"r{i:03d}", seq=i, createdAt=now, updatedAt=now)
+        for k, r in enumerate(n.pop("_replies"), 1):
+            if r["date"]:
+                t = datetime.datetime.fromisoformat(r["date"].replace("Z", "+00:00"))
+                t = (t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)) + datetime.timedelta(seconds=k)
+            else:
+                t = base + datetime.timedelta(seconds=k)
+            ts = t.strftime("%Y-%m-%dT%H:%M:%SZ")
+            rep_ = {"id": f"{n['id']}-c{k}", "note": n["id"], "text": r["text"], "author": r["author"], "authorId": None,
+                    "createdAt": ts, "updatedAt": ts}
+            if not r["author"]:
+                rep_["byOwner"] = True
+            replies.append(rep_)
         (od / "notes" / f"{n['id']}.json").write_text(json.dumps(n, ensure_ascii=False))
     (od / "seeds.json").write_text(json.dumps(out, ensure_ascii=False, indent=1))
     writes = [{"op": "set", "collection": a.collection, "doc_id": n["id"],
                "file_path": str((od / "notes" / f"{n['id']}.json").resolve())} for n in out]
+    if replies:
+        (od / "replies").mkdir(exist_ok=True)
+        for r in replies:
+            (od / "replies" / f"{r['id']}.json").write_text(json.dumps(r, ensure_ascii=False))
+        (od / "replies.json").write_text(json.dumps(replies, ensure_ascii=False, indent=1))
+        writes += [{"op": "set", "collection": "replies", "doc_id": r["id"],
+                    "file_path": str((od / "replies" / f"{r['id']}.json").resolve())} for r in replies]
     for k in range(0, len(writes), 50):
         (od / "batches" / f"batch_{k // 50 + 1}.json").write_text(json.dumps(writes[k:k + 50]))
     from collections import Counter
-    print(f"OK: {len(out)} notes ({dict(Counter(n['kind'] for n in out))}); categories {dict(Counter(n['cat'] for n in out))}")
+    print(f"OK: {len(out)} notes ({dict(Counter(n['kind'] for n in out))}); categories {dict(Counter(n['cat'] for n in out))}"
+          + (f"; {len(replies)} replies on {len({r['note'] for r in replies})} notes" if replies else ""))
     print(f"signed: {dict(Counter(n['author'] or '(page owner account name)' for n in out))}")
     print(f"write_db batches: {(len(writes) + 49) // 50} in {od / 'batches'}")
 

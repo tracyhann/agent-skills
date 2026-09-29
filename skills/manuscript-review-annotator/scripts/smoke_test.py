@@ -2,10 +2,15 @@
 """
 Load a built page in headless Chromium and check it before publishing or sending.
 
-    python smoke_test.py PAGE.html [--notes seeds.json] [--edits edits.json] [--shot out.png] [--exercise-edits]
+    python smoke_test.py PAGE.html [--notes seeds.json] [--edits edits.json] [--replies replies.json]
+                         [--shot out.png] [--exercise-edits] [--exercise-comments]
 
---notes / --edits inject notes and text edits into the tool's browser-storage fallback so the
-live tool can be checked without the artifact database (reports already carry theirs).
+--notes / --edits / --replies inject notes, text edits and reply threads into the tool's
+browser-storage fallback so the live tool can be checked without the artifact database (reports
+already carry theirs).
+--exercise-comments drives reply threads: sign as someone for the session, reply to a note, check
+the reply is signed and kept as plain text (hostile HTML stays text), edit it, search finds it,
+reload keeps it, delete it, and go back to the account name.
 --exercise-edits drives the text-editing features like a user would: set a signature for the
 session with "Signing as", edit a paragraph and save, check tracked changes and the "Show changes" toggle, apply a suggestion, open a note's
 "Edit text", reload and confirm everything persisted, and run hostile HTML through the
@@ -42,6 +47,7 @@ STATE_JS = """() => ({
   suggestionsShown: [...document.querySelectorAll('ins.sugg')].filter(x => getComputedStyle(x).display !== 'none').length,
   figures: document.querySelectorAll('figure').length, tables: document.querySelectorAll('.tbl').length,
   readOnly: document.body.classList.contains('report'),
+  replies: document.querySelectorAll('.reply').length,
   signingAs: (() => { const b = document.querySelector('#sigBtn'); return b && getComputedStyle(b).display !== 'none' ? document.querySelector('#sigName').textContent : null; })(),
 })"""
 
@@ -119,10 +125,80 @@ def exercise(pg, ls_key):
     return checks, fails
 
 
+def exercise_comments(pg, ls_key):
+    """Drive reply threads with a session signature; returns (checks, failures)."""
+    checks, fails = {}, []
+
+    def check(name, ok, detail=""):
+        checks[name] = bool(ok)
+        if not ok:
+            fails.append(f"{name}: {detail}")
+
+    SIG = "QA Signer"
+    stored = lambda key: pg.evaluate(f"() => localStorage.getItem({json.dumps(key)}) || ''")
+    pg.click("#sigBtn")
+    pg.fill("#sigInput", SIG)
+    pg.click("#sigSave")
+    nid = pg.evaluate("""() => { const c = document.querySelector('.note[data-id]'); return c && c.dataset.id; }""")
+    check("found a note to reply to", nid, "no notes")
+    if not nid:
+        return checks, fails
+    card = f'.note[data-id="{nid}"]'
+    pg.click(f'{card} [data-act="reply"]')
+    pg.wait_for_timeout(150)
+    pg.fill(f'{card} textarea[data-field="__reply"]', 'First reply <img src=x onerror="window.__pwned=1"> ok')
+    pg.click(f'{card} [data-act="postreply"]')
+    pg.wait_for_timeout(400)
+    r = pg.evaluate(f"""() => {{ const c = document.querySelector('{card}'); const rs = [...c.querySelectorAll('.reply')]; const last = rs[rs.length - 1]; return {{ n: rs.length, who: last && last.querySelector('.who').textContent, text: last && last.querySelector('.rt').textContent, img: !!c.querySelector('.reply img'), pwned: !!window.__pwned }}; }}""")
+    check("reply is posted and signed", r["n"] >= 1 and r["who"] == SIG and "First reply" in (r["text"] or ""), r)
+    check("reply text is shown as text, never HTML", not r["img"] and not r["pwned"] and "<img" in (r["text"] or ""), r)
+    raw = stored(ls_key + ":replies")
+    check("reply persisted (browser storage)", "First reply" in raw and f'"author":"{SIG}"' in raw and f'"note":"{nid}"' in raw, raw[:160])
+
+    pg.click(f'{card} .reply:last-child [data-act="editreply"]')
+    pg.wait_for_timeout(150)
+    pg.fill(f'{card} textarea[data-field="__replyedit"]', "Edited reply text")
+    pg.keyboard.press("Control+Enter")
+    pg.wait_for_timeout(300)
+    e = pg.evaluate(f"""() => {{ const x = [...document.querySelectorAll('{card} .reply')].pop(); return {{ text: x.querySelector('.rt').textContent, when: x.querySelector('.when').textContent }}; }}""")
+    check("own reply can be edited", e["text"] == "Edited reply text" and "edited" in e["when"], e)
+
+    pg.fill("#search", "Edited reply text")
+    pg.wait_for_timeout(250)
+    found = pg.evaluate("() => [...document.querySelectorAll('.note')].map(n => n.dataset.id)")
+    pg.fill("#search", "")
+    pg.wait_for_timeout(150)
+    check("search finds reply text", found == [nid], found)
+
+    pg.reload()
+    pg.wait_for_timeout(1500)
+    after = pg.evaluate(f"""() => ({{ sig: document.querySelector('#sigName').textContent, reply: [...document.querySelectorAll('{card} .reply .rt')].map(x => x.textContent).includes('Edited reply text') }})""")
+    check("reply and session signature survive reload", after["sig"] == SIG and after["reply"], after)
+
+    pg.click(f'{card} .reply:last-child [data-act="delreply"]')
+    pg.click(f'{card} [data-act="delreplyyes"]')
+    pg.wait_for_timeout(400)
+    gone = pg.evaluate(f"() => ![...document.querySelectorAll('{card} .reply .rt')].some(x => x.textContent === 'Edited reply text')")
+    check("own reply can be deleted", gone and "Edited reply text" not in stored(ls_key + ":replies"))
+
+    pg.click("#sigBtn")
+    pg.fill("#sigInput", "")
+    pg.click("#sigSave")
+    pg.click(f'{card} [data-act="reply"]')
+    pg.fill(f'{card} textarea[data-field="__reply"]', "Unsigned reply")
+    pg.click(f'{card} [data-act="postreply"]')
+    pg.wait_for_timeout(300)
+    last = pg.evaluate(f"() => [...document.querySelectorAll('{card} .reply .who')].pop().textContent")
+    check("without a signature, replies use the account name (\"You\" without an account)", last == "You", last)
+    return checks, fails
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("page"); ap.add_argument("--notes"); ap.add_argument("--edits"); ap.add_argument("--shot")
+    ap.add_argument("--replies")
     ap.add_argument("--exercise-edits", action="store_true")
+    ap.add_argument("--exercise-comments", action="store_true")
     a = ap.parse_args()
     page = Path(a.page).resolve()
     html = page.read_text()
@@ -138,6 +214,10 @@ def main():
             d = json.loads(Path(a.edits).read_text())
             edits = d.get("edits", []) if isinstance(d, dict) else d
             init += f"localStorage.setItem({json.dumps(ls_key + ':edits')}, {json.dumps(json.dumps(edits))});"
+        if a.replies:
+            d = json.loads(Path(a.replies).read_text())
+            reps = d.get("replies", []) if isinstance(d, dict) else d
+            init += f"localStorage.setItem({json.dumps(ls_key + ':replies')}, {json.dumps(json.dumps(reps))});"
         init += "sessionStorage.setItem('seeded', '1'); }"
     with sync_playwright() as p:
         b = p.chromium.launch()
@@ -166,6 +246,10 @@ def main():
             if after["signingAs"] != "cabbage":
                 fails.append(f"the signature lasts for the session: {after['signingAs']!r}")
             r = after
+        if a.exercise_comments:
+            c2, f2 = exercise_comments(pg, ls_key)
+            checks.update(c2); fails += f2
+            r = pg.evaluate(STATE_JS)
         if a.shot:
             pg.screenshot(path=a.shot)
         b.close()

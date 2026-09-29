@@ -240,6 +240,21 @@ ins.chg{color:var(--ins); text-decoration:none; border-bottom:1.5px solid var(--
 .edit textarea.s{min-height:38px}
 .edit .row{display:flex; gap:6px}
 .confirm{display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--del)}
+.linkbtn{border:0; background:none; padding:0; color:var(--accent); font-size:12px; cursor:pointer; text-decoration:underline; text-underline-offset:2px}
+.linkbtn.danger{color:var(--del)}
+
+/* ---------- reply threads */
+.thread{margin:8px 0 2px; padding-left:10px; border-left:2px solid var(--rule); display:flex; flex-direction:column; gap:7px; cursor:default}
+.reply{font-size:13px}
+.reply .rh{display:flex; align-items:baseline; gap:6px; font-size:11.5px; color:var(--ink3)}
+.reply .who{font-weight:600; color:var(--ink2); max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.reply .ra{margin-left:auto; display:inline-flex; gap:9px}
+.reply .rt{margin:1px 0 0; white-space:pre-wrap; overflow-wrap:anywhere}
+.replybar{margin:6px 0 0; cursor:default}
+.composer{display:flex; flex-direction:column; gap:6px; margin-top:8px; cursor:default}
+.composer textarea{border:1px solid var(--rule); border-radius:7px; padding:6px 8px; background:var(--paper); font-size:13.5px; line-height:1.45; min-height:54px; resize:vertical}
+.composer .row{display:flex; gap:6px; align-items:center}
+.composer .hint{font-size:11.5px; color:var(--ink3); margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 
 .toast{position:fixed; left:50%; bottom:calc(20px + env(safe-area-inset-bottom,0px)); transform:translateX(-50%); background:var(--ink); color:var(--paper); padding:9px 14px; border-radius:9px; font-size:13px; z-index:30; opacity:0; pointer-events:none; transition:opacity .2s}
 .toast.on{opacity:.95}
@@ -358,7 +373,8 @@ const CATS = [
 const CAT = Object.fromEntries(CATS.map(c => [c.id, c]));
 const LS_KEY = '__SLUG__-review-notes';
 const COLL = 'annotations';
-const EDITS = 'edits', LOCKS = 'editlocks';
+const EDITS = 'edits', LOCKS = 'editlocks', REPLIES = 'replies';
+const LS_REPLIES = LS_KEY + ':replies', MAX_REPLY = 4000;
 const MATH_NS = 'http://www.w3.org/1998/Math/MathML';
 const TAB_ID = 't' + Math.random().toString(36).slice(2, 9);
 
@@ -372,6 +388,7 @@ const S = {
   store: 'loading', readOnly: false, db: null, user: null, me: null, names: {},
   sig: '', myName: '', ownerId: null,        // sig: this session's signature; ownerId: shows the notes Claude seeded unsigned
   edits: new Map(), ed: null,
+  replies: new Map(), rindex: new Map(), replyingTo: null, replyDraft: '', editingReply: null, confirmDelReply: null, openThreads: new Set(),
 };
 
 /* ================= document ================= */
@@ -466,7 +483,8 @@ function matches(a) {
   if (S.status !== 'all' && a.status !== S.status) return false;
   if (S.q) {
     const q = S.q.toLowerCase();
-    const hay = [a.comment, a.suggestion, a.exact, loc.get(a.block), CAT[a.cat]?.name, authorName(a)].join(' ').toLowerCase();
+    const rs = (S.rindex.get(a.id) || []).map(r => r.text + ' ' + authorName(r));
+    const hay = [a.comment, a.suggestion, a.exact, loc.get(a.block), CAT[a.cat]?.name, authorName(a), ...rs].join(' ').toLowerCase();
     if (!hay.includes(q)) return false;
   }
   return true;
@@ -590,6 +608,7 @@ function noteHTML(a) {
   const comment = a.comment ? `<p class="comment">${esc(a.comment)}</p>` : a.suggestion ? '' : `<p class="comment blank">No comment</p>`;
   const sugg = a.suggestion ? `<p class="sugg-line"><span>Suggested: </span><ins>${esc(a.suggestion)}</ins></p>` : '';
   const addr = a.addressedBy ? `<p class="addressed">Addressed by an edit (${esc(editAuthor(a.addressedBy))}) \u00b7 <button data-act="showedit">Show</button></p>` : '';
+  const thread = threadHTML(a);
   const canEdit = !S.readOnly && (a.kind === 'text' || a.kind === 'box') && blockEls.has(a.block);
   let foot;
   if (S.confirmDel === a.id) {
@@ -602,18 +621,56 @@ function noteHTML(a) {
       : `<span class="state ${a.status}">${a.status === 'done' ? (a.suggestion ? 'Accepted' : 'Done') : 'Dismissed'}</span><button class="btn small" data-act="reopen">Reopen</button>`;
     foot = `${st}<button class="btn small" data-act="edit">Edit</button><button class="btn small danger" data-act="del">Delete</button>`;
   }
-  return `<article class="note cat-${a.cat} st-${a.status}${S.selected === a.id ? ' sel' : ''}" data-id="${a.id}" role="listitem" tabindex="0">${head}${quote}${comment}${sugg}${addr}
-    <footer>${foot}<span class="by" data-author="${esc(authorKey(a))}">${esc(authorName(a))}</span></footer></article>`;
+  return `<article class="note cat-${a.cat} st-${a.status}${S.selected === a.id ? ' sel' : ''}" data-id="${a.id}" role="listitem" tabindex="0">${head}${quote}${comment}${sugg}${addr}${thread}
+    <footer>${foot}<span class="by" data-author="${esc(authorKey(a))}"${acctAttr(a)}>${esc(authorName(a))}</span></footer></article>`;
+}
+// A signature chosen for the session shows the writer's account name on hover, so it never hides who wrote something.
+function acctAttr(o) {
+  if (!o.author || !o.authorId) return '';
+  const nm = S.names[o.authorId] || (o.authorId === S.me ? S.myName : '');
+  return ` data-acct="${esc(o.authorId)}" title="${esc(nm ? 'Account: ' + nm : '')}"`;
+}
+function threadHTML(a) {
+  const rs = S.rindex.get(a.id) || [];
+  const all = S.openThreads.has(a.id) || S.selected === a.id || rs.length <= 3;
+  const shown = all ? rs : rs.slice(-2), more = rs.length - shown.length;
+  let h = rs.length ? `<div class="thread" aria-label="Replies">${more ? `<button class="linkbtn" data-act="morereplies">Show ${more} earlier repl${more === 1 ? 'y' : 'ies'}</button>` : ''}${shown.map(replyHTML).join('')}</div>` : '';
+  if (S.readOnly) return h;
+  const as = esc(S.sig || S.myName || 'you');
+  if (S.replyingTo === a.id) {
+    h += `<div class="composer"><textarea data-field="__reply" maxlength="${MAX_REPLY}" placeholder="Reply as ${as}\u2026" aria-label="Reply">${esc(S.replyDraft)}</textarea>
+      <div class="row"><button class="btn primary small" data-act="postreply">Reply</button><button class="btn small" data-act="cancelreply">Cancel</button><span class="hint">as ${as} \u00b7 Ctrl/\u2318+Enter</span></div></div>`;
+  } else if (!(S.editing && S.editing.id === a.id)) {
+    h += `<p class="replybar"><button class="linkbtn" data-act="reply">${rs.length ? 'Reply' : 'Reply to this note'}</button></p>`;
+  }
+  return h;
+}
+// People edit or delete their own replies; replies Claude seeded (no account) by anyone who can write.
+function ownReply(r) { return !S.readOnly && (!r.authorId || r.authorId === S.me); }
+function replyHTML(r) {
+  const d = r.createdAt ? new Date(r.createdAt) : null, ok = d && !isNaN(d);
+  const when = ok ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
+  if (S.editingReply && S.editingReply.id === r.id) {
+    return `<div class="reply" data-rid="${esc(r.id)}"><div class="composer"><textarea data-field="__replyedit" maxlength="${MAX_REPLY}" aria-label="Edit reply">${esc(S.editingReply.text)}</textarea>
+      <div class="row"><button class="btn primary small" data-act="savereply">Save</button><button class="btn small" data-act="canceleditreply">Cancel</button></div></div></div>`;
+  }
+  let acts = '';
+  if (S.confirmDelReply === r.id) acts = `<span class="ra">Delete reply? <button class="linkbtn danger" data-act="delreplyyes">Delete</button><button class="linkbtn" data-act="delreplyno">Keep</button></span>`;
+  else if (ownReply(r)) acts = `<span class="ra"><button class="linkbtn" data-act="editreply">Edit</button><button class="linkbtn" data-act="delreply">Delete</button></span>`;
+  return `<div class="reply" data-rid="${esc(r.id)}"><div class="rh"><span class="who" data-author="${esc(authorKey(r))}"${acctAttr(r)}>${esc(authorName(r))}</span><span class="when" title="${ok ? esc(d.toLocaleString()) : ''}">${esc(when)}${r.editedAt ? ' \u00b7 edited' : ''}</span>${acts}</div><p class="rt">${esc(r.text)}</p></div>`;
 }
 async function resolveNames(list) {
   if (!S.user) return;
-  const ids = [...new Set(list.map(authorKey).filter(Boolean))];
+  const objs = [...list];
+  for (const a of list) objs.push(...(S.rindex.get(a.id) || []));
+  const ids = [...new Set(objs.flatMap(o => [authorKey(o), o.author && o.authorId ? o.authorId : '']).filter(Boolean))];
   if (!ids.length) return;
   const ps = await S.user.profiles(ids);
   for (const id of ids) {
     const nm = (ps[id] && ps[id].name) || '';
     S.names[id] = nm;
-    document.querySelectorAll(`.by[data-author="${CSS.escape(id)}"]`).forEach(s => s.textContent = nm || (ps[id]?.isMe ? 'You' : id === S.ownerId ? 'Page owner' : 'Someone'));
+    document.querySelectorAll(`.by[data-author="${CSS.escape(id)}"], .who[data-author="${CSS.escape(id)}"]`).forEach(s => s.textContent = nm || (ps[id]?.isMe ? 'You' : id === S.ownerId ? 'Page owner' : 'Someone'));
+    document.querySelectorAll(`[data-acct="${CSS.escape(id)}"]`).forEach(s => s.title = nm ? 'Account: ' + nm : '');
   }
 }
 
@@ -643,8 +700,51 @@ function remove(id) {
   if (S.selected === id) S.selected = null;
   if (S.store === 'db') queue(id, () => S.db.collection(COLL).doc(id).delete());
   else saveLocal();
+  for (const r of (S.rindex.get(id) || [])) removeReply(r.id, true);
+  reindexReplies();
   render();
 }
+
+/* ----- replies: one document per reply in their own collection, so two people replying at
+   once never overwrite each other. Text is stored and shown as plain text, never HTML. They are
+   signed like notes (authorFields: the session signature, else the account name). */
+function reindexReplies() {
+  const m = new Map();
+  for (const r of S.replies.values()) { if (!r || !r.note) continue; if (!m.has(r.note)) m.set(r.note, []); m.get(r.note).push(r); }
+  for (const xs of m.values()) xs.sort((x, y) => String(x.createdAt || '').localeCompare(String(y.createdAt || '')) || String(x.id).localeCompare(String(y.id)));
+  S.rindex = m;
+}
+function writeReply(r) {
+  S.replies.set(r.id, r); reindexReplies();
+  if (S.store === 'db') queue('r:' + r.id, () => S.db.collection(REPLIES).doc(r.id).set(r));
+  else saveLocalReplies();
+}
+function removeReply(rid, quiet) {
+  S.replies.delete(rid);
+  if (S.store === 'db') queue('r:' + rid, () => S.db.collection(REPLIES).doc(rid).delete());
+  else saveLocalReplies();
+  if (!quiet) { reindexReplies(); renderRail(); }
+}
+function postReply(noteId) {
+  const text = S.replyDraft.trim();
+  if (!text) { toast('Write a reply first.'); return; }
+  const now = new Date().toISOString();
+  writeReply({ id: 'c' + newId().slice(1), note: noteId, text: text.slice(0, MAX_REPLY), ...authorFields(), createdAt: now, updatedAt: now });
+  S.replyingTo = null; S.replyDraft = ''; S.openThreads.add(noteId);
+  renderRail(); toast('Reply posted');
+}
+function saveReplyEdit() {
+  const ed = S.editingReply; if (!ed) return;
+  const r = S.replies.get(ed.id); S.editingReply = null;
+  const text = ed.text.trim();
+  if (!r) { renderRail(); return; }
+  if (!text) { S.confirmDelReply = r.id; renderRail(); return; }
+  if (text !== r.text) { const now = new Date().toISOString(); writeReply({ ...r, text: text.slice(0, MAX_REPLY), updatedAt: now, editedAt: now }); }
+  renderRail();
+}
+let lsRTimer;
+function saveLocalReplies() { clearTimeout(lsRTimer); lsRTimer = setTimeout(() => { try { localStorage.setItem(LS_REPLIES, JSON.stringify([...S.replies.values()])); } catch (_) {} }, 250); }
+function loadLocalReplies() { try { const v = JSON.parse(localStorage.getItem(LS_REPLIES) || '[]'); return Array.isArray(v) ? v : []; } catch (_) { return []; } }
 let lsTimer;
 function saveLocal() { clearTimeout(lsTimer); lsTimer = setTimeout(() => { try { localStorage.setItem(LS_KEY, JSON.stringify([...S.anns.values()].map(strip))); } catch (_) {} }, 250); }
 function loadLocal() { try { const v = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (_) { return []; } }
@@ -698,9 +798,16 @@ async function init() {
     setStore('local');
     for (const a of loadLocal()) S.anns.set(a.id, a);
     for (const e of loadLocalEdits()) if (e && e.block) S.edits.set(e.block, e);
-    refreshEdits(); render(); return;
+    for (const r of loadLocalReplies()) if (r && r.id && r.note) S.replies.set(r.id, r);
+    reindexReplies(); refreshEdits(); render(); return;
   }
   S.db = db; setStore('db');
+  db.collection(REPLIES).onSnapshot(snap => {
+    const m = new Map();
+    snap.docs.forEach(d => { const v = d.data(); if (v && v.note) m.set(d.id, { ...v, id: d.id }); });
+    if (S.editingReply && !m.has(S.editingReply.id)) S.editingReply = null;
+    S.replies = m; reindexReplies(); renderRail();
+  }, () => {});
   db.collection(EDITS).onSnapshot(snap => {
     const m = new Map();
     snap.docs.forEach(d => { const v = d.data(); if (v && v.block) m.set(v.block, { ...v }); });
@@ -875,7 +982,10 @@ function exportPayload() {
     .map(e => { const { history, ...rest } = e; return { ...rest, location: loc.get(e.block) || e.block, ...(e.author ? {} : { authorName: editAuthor(e) }) }; });
   // authorName: the account names this viewer sees, for reports built from the file; never stored back
   const annotations = allSorted().map(a => a.author ? strip(a) : { ...strip(a), authorName: authorName(a) });
-  return { format: '__SLUG__-review-notes', version: 2, exportedAt: new Date().toISOString(), annotations, edits };
+  const replies = [...S.replies.values()].filter(r => S.anns.has(r.note))
+    .sort((x, y) => (numbers.get(x.note) || 0) - (numbers.get(y.note) || 0) || String(x.createdAt || '').localeCompare(String(y.createdAt || '')))
+    .map(r => r.author ? { ...r } : { ...r, authorName: authorName(r) });
+  return { format: '__SLUG__-review-notes', version: 3, exportedAt: new Date().toISOString(), annotations, edits, replies };
 }
 function reportMarkdown() {
   const all = allSorted();
@@ -892,6 +1002,10 @@ function reportMarkdown() {
       md += `\n  ${(a.comment || '(no comment)').replace(/\n/g, '\n  ')}`;
       if (a.suggestion) md += `\n  Suggested: ${a.suggestion}`;
       md += `\n  (${authorName(a)})\n`;
+      for (const r of (S.rindex.get(a.id) || [])) {
+        const d = r.createdAt ? new Date(r.createdAt) : null;
+        md += `  > **${authorName(r)}**${d && !isNaN(d) ? ' (' + d.toLocaleDateString() + ')' : ''}: ${String(r.text).replace(/\n/g, '\n  > ')}\n`;
+      }
     }
   }
   const eds = [...S.edits.values()].sort((x, y) => (order.get(x.block) ?? 1e6) - (order.get(y.block) ?? 1e6));
@@ -937,7 +1051,15 @@ async function importFile(file) {
       await Promise.all(cleaned.slice(i, i + 5).map(c => queue(c.id, () => S.db.collection(COLL).doc(c.id).set(strip(c)))));
   }
   if (S.store !== 'db') saveLocal();
-  render(); toast(`Imported ${n} note${n === 1 ? '' : 's'}.`);
+  const inReplies = data && Array.isArray(data.replies) ? data.replies.filter(r => r && r.id && r.note && typeof r.text === 'string' && S.anns.has(r.note)) : [];
+  for (const { authorName: _, ...r } of inReplies) {
+    const doc = { ...r, text: r.text.slice(0, MAX_REPLY) };
+    S.replies.set(doc.id, doc);
+    if (S.store === 'db') await queue('r:' + doc.id, () => S.db.collection(REPLIES).doc(doc.id).set(doc));
+  }
+  if (S.store !== 'db' && inReplies.length) saveLocalReplies();
+  reindexReplies();
+  render(); toast(`Imported ${n} note${n === 1 ? '' : 's'}${inReplies.length ? ` and ${inReplies.length} repl${inReplies.length === 1 ? 'y' : 'ies'}` : ''}.`);
 }
 
 /* ----- misc UI */
@@ -974,9 +1096,20 @@ $('#chips').onclick = e => { const b = e.target.closest('.chip'); if (!b) return
 $('#list').addEventListener('click', e => {
   const card = e.target.closest('.note'); if (!card) return;
   const id = card.dataset.id, act = e.target.closest('[data-act]')?.dataset.act;
-  if (!act) { if (!e.target.closest('.edit')) select(id, { scrollDoc: true, scrollRail: false }); return; }
+  if (!act) { if (!e.target.closest('.edit, .composer, .thread')) select(id, { scrollDoc: true, scrollRail: false }); return; }
   e.stopPropagation();
-  if (act === 'edit') startEdit(id);
+  const rid = e.target.closest('.reply')?.dataset.rid;
+  if (act === 'reply') { if (S.readOnly) return; S.replyingTo = id; S.replyDraft = ''; S.editingReply = null; S.selected = id; renderRail(); focusField('__reply'); }
+  else if (act === 'postreply') postReply(id);
+  else if (act === 'cancelreply') { S.replyingTo = null; S.replyDraft = ''; renderRail(); }
+  else if (act === 'morereplies') { S.openThreads.add(id); renderRail(); }
+  else if (act === 'editreply') { const r = rid && S.replies.get(rid); if (r) { S.editingReply = { id: rid, text: r.text }; S.confirmDelReply = null; renderRail(); focusField('__replyedit'); } }
+  else if (act === 'savereply') saveReplyEdit();
+  else if (act === 'canceleditreply') { S.editingReply = null; renderRail(); }
+  else if (act === 'delreply') { S.confirmDelReply = rid || null; renderRail(); }
+  else if (act === 'delreplyno') { S.confirmDelReply = null; renderRail(); }
+  else if (act === 'delreplyyes') { const x = S.confirmDelReply; S.confirmDelReply = null; if (x) { removeReply(x); toast('Reply deleted'); } }
+  else if (act === 'edit') startEdit(id);
   else if (act === 'save') saveEdit();
   else if (act === 'cancel') { const a = S.anns.get(id); S.editing = null; if (a && a.kind === 'note' && !a.comment) remove(id); else render(); }
   else if (act === 'done') setStatus(id, 'done');
@@ -989,13 +1122,25 @@ $('#list').addEventListener('click', e => {
   else if (act === 'delno') { S.confirmDel = null; renderRail(); }
   else if (act === 'delyes') { S.confirmDel = null; remove(id); toast('Note deleted'); }
 });
+function focusField(f) {
+  requestAnimationFrame(() => { const t = document.querySelector(`#list [data-field="${f}"]`); if (t) { t.focus(); const n = t.value.length; try { t.setSelectionRange(n, n); } catch (_) {} } });
+}
 $('#list').addEventListener('input', e => {
-  const f = e.target.dataset.field; if (!f || !S.editing) return;
+  const f = e.target.dataset.field;
+  if (f === '__reply') { S.replyDraft = e.target.value; return; }
+  if (f === '__replyedit') { if (S.editingReply) S.editingReply.text = e.target.value; return; }
+  if (!f || !S.editing) return;
   S.editing.draft[f] = e.target.value;
   if (f === 'cat') { const card = e.target.closest('.note'); CATS.forEach(c => card.classList.remove('cat-' + c.id)); card.classList.add('cat-' + e.target.value); card.querySelector('.catname').textContent = CAT[e.target.value].name; }
 });
 $('#list').addEventListener('keydown', e => {
-  if (e.target.matches('textarea') && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEdit(); }
+  if (e.target.matches('textarea') && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    const f = e.target.dataset.field;
+    if (f === '__reply') postReply(e.target.closest('.note')?.dataset.id);
+    else if (f === '__replyedit') saveReplyEdit();
+    else saveEdit();
+  }
   else if (e.target.classList.contains('note') && e.key === 'Enter') select(e.target.dataset.id, { scrollDoc: true, scrollRail: false });
 });
 $('#sheet').addEventListener('click', e => {
@@ -1034,7 +1179,15 @@ document.addEventListener('keydown', e => {
     else if (e.key === 'Enter') { e.preventDefault(); toast('Edit one paragraph at a time; line breaks aren\u2019t kept.'); }
     return;
   }
-  if (e.target.matches('input, textarea, select')) { if (e.key === 'Escape' && S.editing) { S.editing = null; render(); } return; }
+  if (e.target.matches('input, textarea, select')) {
+    if (e.key === 'Escape') {
+      const f = e.target.dataset.field;
+      if (f === '__reply') { S.replyingTo = null; S.replyDraft = ''; renderRail(); }
+      else if (f === '__replyedit') { S.editingReply = null; renderRail(); }
+      else if (S.editing) { S.editing = null; render(); }
+    }
+    return;
+  }
   if (e.key === 'Escape') { hidePop(); setMode('text'); $('#modal').classList.remove('on'); closeRailMobile(); }
   else if (e.key === 'b' || e.key === 'B') setMode(S.mode === 'box' ? 'text' : 'box');
   else if (e.key === 't' || e.key === 'T') setMode('text');

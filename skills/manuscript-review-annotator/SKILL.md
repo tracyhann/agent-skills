@@ -1,6 +1,6 @@
 ---
 name: manuscript-review-annotator
-description: Review a research manuscript (Word .docx, LaTeX source or PDF) thoroughly and deliver the review as an interactive annotation page — the full paper with figures and tables, every issue pre-highlighted in the text or boxed on the figure, shareable with co-authors, who can also edit the manuscript text right in the page to address the notes (tracked changes, one-click suggestions) — plus clean exports, a standalone read-only report, and a patch that carries the page's text edits back into the LaTeX source. Use this whenever someone uploads a paper draft and asks to check it for issues or inconsistencies, wants review comments placed on the manuscript, wants a page to highlight, box, comment on or edit a paper with co-authors, wants to address or resolve review comments by editing the text, wants edits made in such a page applied to their .tex/Overleaf or Word files, or wants to clean up, relabel, export or snapshot the notes from such a page, even if they never say "annotation", "artifact" or "skill".
+description: Review a research manuscript (Word .docx, LaTeX source or PDF) thoroughly and deliver the review as an interactive annotation page — the full paper with figures and tables, every issue pre-highlighted in the text or boxed on the figure, shared with co-authors who discuss notes in signed reply threads and edit the manuscript text in place to address them (tracked changes, one-click suggestions) — plus clean exports, a read-only report, and a patch that carries the page's edits back into the LaTeX source. Use this whenever someone uploads a paper draft and asks to check it for issues or inconsistencies, wants review comments placed on the manuscript, wants a page to highlight, box, comment on, discuss or edit a paper with co-authors, wants to address or resolve review comments by editing the text, wants edits made in such a page applied to their .tex/Overleaf or Word files, or wants to clean up, relabel, export or snapshot the notes from such a page, even if they never say "annotation", "artifact" or "skill".
 license: MIT
 compatibility: Python 3.10+ with pandoc, beautifulsoup4, lxml, pillow, pdfplumber and pypdfium2 (see requirements.txt); playwright for smoke tests. The live page needs the Artifact publishing tool (claude.ai); elsewhere deliver the standalone report.
 metadata:
@@ -18,6 +18,11 @@ paragraph, heading, caption, table cell or reference in place, tick the notes th
 resolves, and save. Suggestions apply with one click. Edits are shared (their own `edits`
 collection), shown as tracked changes, revertible, and can be carried back into the LaTeX
 source with `scripts/apply_edits.py`.
+
+Co-authors discuss a note in its **reply thread** ("Reply" under any note; people can edit or
+delete their own replies). Replies are signed like notes and edits: with the signature the person
+set for the session under "Signing as", else their account name, and a session signature shows
+the account name on hover. Replies live in their own `replies` collection.
 
 Scripts live in `scripts/`, the page template in `assets/tool_template.html`, and detailed
 guidance in `references/` (read each when its step comes up).
@@ -76,6 +81,11 @@ finding into `/home/claude/review/draft.json`:
 Add `"block": "b019"` when the quote occurs in several blocks, `"occ": n` to pick a repeat
 within one block. A suggestion must replace exactly the quoted words.
 
+To seed a discussion under a note (an author's response to a reviewer, a co-author's earlier
+answer), give it `"replies": [{"text": "...", "author": "Authors (rebuttal)", "date": "2026-07-28"}]`.
+A reply without `author` is signed like the notes (`--author`, else the page owner's account
+name). Quote or summarise the source; never invent a response.
+
 For figure boxes, get panel borders first, then check placement visually:
 ```bash
 python scripts/check_boxes.py lines /home/claude/review/doc fig-3
@@ -93,7 +103,8 @@ python scripts/validate_notes.py /home/claude/review/doc /home/claude/review/dra
 Pass `--author` only with a signature the person gave in this session. Without it the notes are
 marked as the requester's (`byOwner`) and the page shows the page owner's account name, which is
 the requester's once they publish it. Fix every ERROR and rerun until it prints OK. Output:
-`seed/seeds.json`, one file per note, and `seed/batches/batch_N.json` for seeding.
+`seed/seeds.json`, one file per note, `seed/replies.json` when there are replies, and
+`seed/batches/batch_N.json` for seeding (notes first, then replies).
 
 ### 4. Build and test the page
 
@@ -102,9 +113,11 @@ python scripts/build_html.py tool /home/claude/review/doc /mnt/user-data/outputs
 python scripts/smoke_test.py /mnt/user-data/outputs/<stem>_review.html --notes /home/claude/review/seed/seeds.json --shot /home/claude/review/shot.png
 ```
 The smoke test must print OK (no JavaScript errors, no unmatched quotes). Look at the
-screenshot. After any change to the template, also run it with `--exercise-edits`: it edits a
-paragraph, applies a suggestion (including one in a table), opens a note's "Edit text", reloads,
-and pushes hostile HTML through the sanitizer; every check must print PASS.
+screenshot. Pass `--replies seed/replies.json` when the draft had replies. After any change to
+the template, also run it with `--exercise-edits --exercise-comments`: they edit a paragraph,
+apply a suggestion (including one in a table), open a note's "Edit text", sign for the session,
+post, edit, search and delete a reply, reload, and push hostile HTML through the sanitizer and
+the reply box; every check must print PASS.
 
 ### 5. Publish and seed
 
@@ -120,9 +133,9 @@ deliver the standalone report instead:
 
 Reply briefly, in prose: what the review found at the highest level (the few issues that matter
 most), how many notes by category, and how to use the page (select text to highlight or
-comment, "Box on figure" to draw on figures, "Edit text" to change the manuscript and tick the
-notes an edit addresses, "Apply" on a suggestion, "Show changes" for tracked changes, notes and
-edits save automatically, export buttons). Say how the notes are signed, and that everyone
+comment, "Box on figure" to draw on figures, "Reply" to discuss a note, "Edit text" to change
+the manuscript and tick the notes an edit addresses, "Apply" on a suggestion, "Show changes" for
+tracked changes, notes, replies and edits save automatically, export buttons). Say how the notes are signed, and that everyone
 signs with their own account name unless they set a different signature for their session with
 "Signing as" in the toolbar. Mention that it is private until shared and can be shared within
 the organization. Do not paste the full list of notes into the chat; the page is
@@ -136,7 +149,8 @@ Read `references/artifact_ops.md` for the exact calls.
 |---|---|
 | "I finished reviewing; delete dismissed ones, keep the open ones in a clean source" | read notes back, `notes_ops.py batch --delete-status dismissed`, write_db, `notes_ops.py clean` → present .md and .json |
 | "Make a standalone report / bake the comments in" | read notes back, `build_html.py report` with author mapping, smoke test, present the file |
-| "Sign them as X" / "use my account name" | `notes_ops.py batch --relabel "old=X"` in the live tool (`"=X"` signs Claude's unsigned notes; `"X="` returns them to the account name); also rebuild any report. For their own future notes, point them to "Signing as" |
+| "Sign them as X" / "use my account name" | `notes_ops.py batch --relabel "old=X"` in the live tool (`"=X"` signs Claude's unsigned notes; `"X="` returns them to the account name); also rebuild any report; replies: the same on `_notes/replies` with `--collection replies`. For their own future notes and replies, point them to "Signing as" |
+| "Add the rebuttal / the authors' answers to the reviewer notes" | draft them as `"replies"` on those notes (quote or summarise the source), validate, write the reply batch; on a published page, see artifact_ops.md section 2 |
 | "Change a colour / default / layout" | edit the template, rebuild, republish with the same `url` |
 | "Where is this stored? Who can see it? Do invitees' names show?" | answer from artifact_ops.md section 6 |
 | "Apply the edits from the page to my LaTeX / Overleaf project" | read the `edits` collection back, run `apply_edits.py DOC_DIR <edits dir> <project> OUT`, present `apply_report.md`, `changes.diff` and the changed files; say which changes need a manual fix and why (artifact_ops.md section 7) |

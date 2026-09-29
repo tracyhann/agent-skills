@@ -67,7 +67,8 @@ def test_pipeline(fixture, tmp_path, browser_ok):
     fig = next(b["id"] for b in blocks if b["kind"] == "figure")
     draft = tmp_path / "draft.json"
     draft.write_text(json.dumps([
-        {"cat": "numbers", "exact": phrase[:22], "comment": "Check against the abstract."},
+        {"cat": "numbers", "exact": phrase[:22], "comment": "Check against the abstract.",
+         "replies": [{"text": "Checked: <b>matches</b> the abstract.", "author": "coauthor", "date": "2026-07-28"}]},
         {"cat": "typos", "exact": phrase[:22], "comment": "Wording.", "suggestion": phrase[:22].upper()},
         {"cat": "figures", "fig": fig, "box": [0.05, 0.05, 0.4, 0.4], "comment": "Panel label?"},
         {"cat": "blocker", "kind": "note", "comment": "General note."},
@@ -78,26 +79,35 @@ def test_pipeline(fixture, tmp_path, browser_ok):
     assert len(seeds) == 4 + ncom
     assert all(s["author"] for s in seeds)
     assert list((seed / "batches").glob("batch_*.json"))
+    replies = json.loads((seed / "replies.json").read_text())
+    assert len(replies) == 1 and replies[0]["author"] == "coauthor" and replies[0]["createdAt"].startswith("2026-07-28")
+    assert replies[0]["note"] in {s["id"] for s in seeds} and replies[0]["id"] == replies[0]["note"] + "-c1"
+    writes = [w for f in sorted((seed / "batches").glob("batch_*.json")) for w in json.loads(f.read_text())]
+    assert [w["collection"] for w in writes].count("replies") == 1 and writes[-1]["collection"] == "replies"
 
     tool, report = tmp_path / "tool.html", tmp_path / "report.html"
     run(SCRIPTS / "build_html.py", "tool", doc, tool, "--doc-name", Path(fixture).name)
     run(SCRIPTS / "build_html.py", "report", doc, seed / "seeds.json", report, "--doc-name", Path(fixture).name,
-        "--author-map", "tester=reviewer")
+        "--author-map", "tester=reviewer", "--replies", seed / "replies.json")
     html = tool.read_text()
     assert "__DOC__" not in html and "__IMGS__" not in html and "showEdits: true" in html
     assert "__STATIC__" not in report.read_text()
 
     clean = tmp_path / "clean"
-    run(SCRIPTS / "notes_ops.py", "clean", doc, seed / "seeds.json", clean)
-    assert json.loads(clean.with_suffix(".json").read_text())["annotations"]
+    run(SCRIPTS / "notes_ops.py", "clean", doc, seed / "seeds.json", clean, "--replies", seed / "replies.json")
+    cj = json.loads(clean.with_suffix(".json").read_text())
+    assert cj["annotations"] and len(cj["replies"]) == 1
+    assert "**coauthor** (2026-07-28): Checked: <b>matches</b> the abstract." in clean.with_suffix(".md").read_text()
 
     if browser_ok:
         out = run(SCRIPTS / "smoke_test.py", tool, "--notes", seed / "seeds.json")
         assert "OK" in out and "orphans: []" in out
         out = run(SCRIPTS / "smoke_test.py", report)
-        assert "readOnly: True" in out and "signingAs: None" in out
-        out = run(SCRIPTS / "smoke_test.py", tool, "--notes", seed / "seeds.json", "--exercise-edits")
+        assert "readOnly: True" in out and "signingAs: None" in out and "replies: 1" in out
+        out = run(SCRIPTS / "smoke_test.py", tool, "--notes", seed / "seeds.json", "--replies", seed / "replies.json",
+                  "--exercise-edits", "--exercise-comments")
         assert "OK" in out and "FAIL" not in out and "PASS  Apply replaces the quoted text" in out
+        assert "PASS  reply is posted and signed" in out and "PASS  reply text is shown as text, never HTML" in out
 
 
 @pytest.mark.skipif(shutil.which("pandoc") is None, reason="pandoc not installed")
@@ -201,6 +211,37 @@ def test_signatures_default_to_the_account_name(tmp_path):
     by = {n["id"]: n["author"] for n in static["notes"]}
     assert [by[n["id"]] for n in seeds] == ["cabbage", "cabbage"]
     assert by["u1"] == "Alex" and by["u2"] == "Reviewer" and "1 notes are signed by account name" in out
+
+
+@pytest.mark.skipif(shutil.which("pandoc") is None, reason="pandoc not installed")
+def test_report_reply_threads(tmp_path):
+    """Replies are signed like notes in the report: their signature, else the account name the page
+    exported, else a mapping; replies to notes that are not in the report are dropped."""
+    doc = tmp_path / "doc"
+    run(SCRIPTS / "extract.py", FIX / "sample.docx", doc)
+    note = {"id": "n1", "kind": "note", "cat": "mine", "comment": "General.", "status": "open", "author": "Robin"}
+    export = tmp_path / "export.json"
+    export.write_text(json.dumps({
+        "annotations": [note, {**note, "id": "n2", "status": "dismissed"}],
+        "replies": [
+            {"id": "c1", "note": "n1", "text": "Agreed.", "author": "Alex", "authorId": "u_a", "createdAt": "2026-09-29T10:00:00Z"},
+            {"id": "c2", "note": "n1", "text": "Done.", "author": "", "authorId": "u_b", "authorName": "Sam Sample", "createdAt": "2026-09-29T11:00:00Z"},
+            {"id": "c3", "note": "n1", "text": "Seeded.", "author": "", "authorId": None, "byOwner": True, "createdAt": "2026-09-29T12:00:00Z"},
+            {"id": "c4", "note": "n2", "text": "On a dismissed note.", "author": "Alex", "authorId": "u_a"},
+        ],
+    }))
+    report = tmp_path / "report.html"
+    out = run(SCRIPTS / "build_html.py", "report", doc, export, report, "--doc-name", "sample.docx", "--author-map", "@owner=Kim Test")
+    static = json.loads(report.read_text().split("const STATIC = ", 1)[1].split(";\n", 1)[0].replace("<\\/", "</"))
+    assert [(r["id"], r["author"]) for r in static["replies"]] == [("c1", "Alex"), ("c2", "Sam Sample"), ("c3", "Kim Test")]
+    assert not any("authorId" in r or "authorName" in r for r in static["replies"])
+    assert "3 replies" in out
+
+    clean = tmp_path / "clean"
+    run(SCRIPTS / "notes_ops.py", "clean", doc, export, clean, "--author-map", "@owner=Kim Test")
+    md = clean.with_suffix(".md").read_text()
+    assert "> **Alex** (2026-09-29): Agreed." in md and "> **Sam Sample**" in md and "> **Kim Test**" in md
+    assert "dismissed note" not in md
 
 
 def test_invalid_anchor_is_rejected(tmp_path):
