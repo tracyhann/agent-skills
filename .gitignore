@@ -1,0 +1,27 @@
+# build output
+dist/
+*.skill
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# working folders the skill creates while running
+review/
+_notes/
+pdf_figs/
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# LaTeX build products in fixtures
+*.aux
+*.log
+*.bbl
+*.blg
+*.out

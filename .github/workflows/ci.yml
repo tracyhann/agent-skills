@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+
+      - name: Python packages
+        run: |
+          pip install pytest
+          for req in skills/*/requirements.txt; do pip install -r "$req"; done
+          python -m playwright install --with-deps chromium
+
+      - name: Validate skills
+        run: python tools/validate_skills.py
+
+      - name: Index is up to date
+        run: python tools/build_index.py --check
+
+      - name: Tests
+        run: pytest -q tests
+
+      - name: Package
+        run: python tools/package_skills.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skills
+          path: dist/*.skill
