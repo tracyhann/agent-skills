@@ -1,10 +1,10 @@
 ---
 name: manuscript-review-annotator
-description: Review a research manuscript (Word .docx, LaTeX source or PDF) thoroughly and deliver the review as an interactive annotation page — the full paper with figures and tables, every issue pre-highlighted in the text or boxed on the figure, editable and shareable with co-authors — plus clean exports and a standalone read-only report. Use this whenever someone uploads a paper draft and asks to check it for issues or inconsistencies, wants review comments placed on the manuscript, wants a page to highlight, box or comment on a paper with co-authors, or wants to clean up, relabel, export or snapshot the notes from such a page, even if they never say "annotation", "artifact" or "skill".
+description: Review a research manuscript (Word .docx, LaTeX source or PDF) thoroughly and deliver the review as an interactive annotation page — the full paper with figures and tables, every issue pre-highlighted in the text or boxed on the figure, shareable with co-authors, who can also edit the manuscript text right in the page to address the notes (tracked changes, one-click suggestions) — plus clean exports, a standalone read-only report, and a patch that carries the page's text edits back into the LaTeX source. Use this whenever someone uploads a paper draft and asks to check it for issues or inconsistencies, wants review comments placed on the manuscript, wants a page to highlight, box, comment on or edit a paper with co-authors, wants to address or resolve review comments by editing the text, wants edits made in such a page applied to their .tex/Overleaf or Word files, or wants to clean up, relabel, export or snapshot the notes from such a page, even if they never say "annotation", "artifact" or "skill".
 license: MIT
 compatibility: Python 3.10+ with pandoc, beautifulsoup4, lxml, pillow, pdfplumber and pypdfium2 (see requirements.txt); playwright for smoke tests. The live page needs the Artifact publishing tool (claude.ai); elsewhere deliver the standalone report.
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Manuscript review annotator
@@ -12,6 +12,12 @@ metadata:
 Turns a manuscript into a living review: Claude reviews the paper, anchors every note to the
 exact text or figure region it concerns, publishes an annotation page backed by a shared
 notes database, and later cleans up, relabels or snapshots those notes on request.
+
+The page is also where the notes get addressed: co-authors switch to **Edit text**, change a
+paragraph, heading, caption, table cell or reference in place, tick the notes the change
+resolves, and save. Suggestions apply with one click. Edits are shared (their own `edits`
+collection), shown as tracked changes, revertible, and can be carried back into the LaTeX
+source with `scripts/apply_edits.py`.
 
 Scripts live in `scripts/`, the page template in `assets/tool_template.html`, and detailed
 guidance in `references/` (read each when its step comes up).
@@ -44,7 +50,10 @@ every figure and table should have a caption; fix warnings before going on.
 Format notes:
 - LaTeX: pandoc renders the source (math as MathML, `\ref` numbers, citations from `.bib`,
   starred floats handled, PDF figures rasterised). Pass `--main file.tex` if the project has
-  several candidates. EPS figures show as placeholders.
+  several candidates. EPS figures show as placeholders. The extractor rewrites table constructs
+  that make pandoc drop cell text, and retries without local `.sty`/`.cls` files when pandoc
+  hangs on them (it prints a warning; layout only). It also warns when fewer figures come out
+  than the source declares. See "LaTeX projects" below before accepting warnings.
 - PDF: headings, captions, figures (cropped from the page), tables (parsed, or cropped as an
   image), display equations (cropped, ids `eq-N`) and references are reconstructed. Open a few
   crops in `pdf_figs/` and skim `outline.txt`; inline maths in PDFs comes out as plain text.
@@ -90,7 +99,9 @@ python scripts/build_html.py tool /home/claude/review/doc /mnt/user-data/outputs
 python scripts/smoke_test.py /mnt/user-data/outputs/<stem>_review.html --notes /home/claude/review/seed/seeds.json --shot /home/claude/review/shot.png
 ```
 The smoke test must print OK (no JavaScript errors, no unmatched quotes). Look at the
-screenshot.
+screenshot. After any change to the template, also run it with `--exercise-edits`: it edits a
+paragraph, applies a suggestion (including one in a table), opens a note's "Edit text", reloads,
+and pushes hostile HTML through the sanitizer; every check must print PASS.
 
 ### 5. Publish and seed
 
@@ -104,12 +115,13 @@ deliver the standalone report instead:
 
 ### 6. Hand over
 
-Reply briefly, in prose: what the review found at the highest level (the few issues that
-matter most), how many notes by category, and how to use the page (select text to highlight
-or comment, "Box on figure" to draw on figures, notes save automatically, suggested edits
-shown inline, export buttons). Mention that it is private until shared and can be shared
-within the organization. Do not paste the full list of notes into the chat; the page is the
-deliverable.
+Reply briefly, in prose: what the review found at the highest level (the few issues that matter
+most), how many notes by category, and how to use the page (select text to highlight or
+comment, "Box on figure" to draw on figures, "Edit text" to change the manuscript and tick the
+notes an edit addresses, "Apply" on a suggestion, "Show changes" for tracked changes, notes and
+edits save automatically, export buttons). Mention that it is private until shared and can be
+shared within the organization. Do not paste the full list of notes into the chat; the page is
+the deliverable.
 
 ## Later requests on the same page
 
@@ -122,7 +134,24 @@ Read `references/artifact_ops.md` for the exact calls.
 | "Sign them as X" / "use my account name" | `notes_ops.py batch --relabel "old=X"` in the live tool; also rebuild any report |
 | "Change a colour / default / layout" | edit the template, rebuild, republish with the same `url` |
 | "Where is this stored? Who can see it? Do invitees' names show?" | answer from artifact_ops.md section 6 |
-| "Apply the accepted edits to the Word file" | read notes back, then edit the .docx with tracked changes following the docx skill |
+| "Apply the edits from the page to my LaTeX / Overleaf project" | read the `edits` collection back, run `apply_edits.py DOC_DIR <edits dir> <project> OUT`, present `apply_report.md`, `changes.diff` and the changed files; say which changes need a manual fix and why (artifact_ops.md section 7) |
+| "Apply the edits / accepted suggestions to the Word file" | read the `edits` collection back, run `apply_edits.py` for `hunks.json` (before/after with context), then write them into the .docx as tracked changes following the docx skill |
+| "What did we change?" / "Undo that edit" | Export report lists every text edit with its diff; in the page, open the block, "Use original", Save. Each edit keeps its last 10 versions in `history` if an older one is needed |
+
+## LaTeX projects
+
+pandoc covers most papers, but these showed up on a real project and silently lost content:
+- A project's own style file (`.sty`) sent pandoc into an endless loop. The extractor now times
+  out and retries without local style files; nothing to do unless macros defined only in those
+  files are needed (then define them in a copy of the main file).
+- Figures inside `minipage` with `\captionof`, and `sidewaysfigure`/`sidewaystable`, come out
+  without captions or not at all. Rewrite them as ordinary `figure`/`table` floats in a scratch
+  copy of the project (never in the user's folder) and extract again.
+- `\Cref`/`\ref` to such floats render as bare numbers or `[fig:label]`, appendix sections
+  are numbered 6, 7… instead of A, B…, and `--citeproc` gives author-date citations for a
+  numbered bibliography. When fidelity matters, resolve numbering and `\cite` numbers in the
+  scratch copy, and check the citation order against the compiled PDF's reference list.
+- Text inside MathML cannot be highlighted: quote the words next to the maths instead.
 
 ## Things that went wrong before (avoid them)
 
@@ -132,3 +161,9 @@ Read `references/artifact_ops.md` for the exact calls.
 - Grey highlights for co-author comments were hard to read; teal is the default now.
 - Suggested edits should be visible on load in both the tool and the report.
 - Cleaning up `/mnt/user-data/outputs` once deleted files the user still needed.
+- "Accept edit" used to only mark a note done; users expected the text to change. "Apply" now
+  edits the text; keep it that way.
+- A suggestion whose quote started exactly at a table cell boundary was once inserted between
+  cells, emptying the cell. The range helper now starts inside the containing text node, and a
+  suggestion that spans cells opens the editor instead; the smoke test guards this.
+- Edits are HTML that other viewers render: keep the sanitizer on both save and display.

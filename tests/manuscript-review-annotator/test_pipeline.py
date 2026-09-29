@@ -96,6 +96,68 @@ def test_pipeline(fixture, tmp_path, browser_ok):
         assert "OK" in out and "orphans: []" in out
         out = run(SCRIPTS / "smoke_test.py", report)
         assert "readOnly: True" in out
+        out = run(SCRIPTS / "smoke_test.py", tool, "--notes", seed / "seeds.json", "--exercise-edits")
+        assert "OK" in out and "FAIL" not in out and "PASS  Apply replaces the quoted text" in out
+
+
+@pytest.mark.skipif(shutil.which("pandoc") is None, reason="pandoc not installed")
+def test_latex_tables_keep_cell_text(tmp_path):
+    """Column specs with >{..}/@{..}, \\resizebox, \\shortstack and a longtable head used to lose cells."""
+    doc = tmp_path / "doc"
+    out = run(SCRIPTS / "extract.py", FIX / "latex_tables" / "tables.tex", doc)
+    assert "WARNING" not in out
+    tables = [b for b in json.loads((doc / "doc.json").read_text())["blocks"] if b["kind"] == "table"]
+    assert len(tables) == 2
+    assert tables[0]["rows"] == [["Site name", "Mean score", "N"], ["North clinic", "12.5", "30"], ["South clinic", "14.0", "28"]]
+    assert tables[1]["rows"] == [["Visit", "Window"], ["Baseline", "Day 0"], ["Follow-up", "Week 4"]]
+    assert all(t.get("caption") for t in tables)
+
+
+@pytest.mark.skipif(shutil.which("pandoc") is None, reason="pandoc not installed")
+def test_edits_carry_back_to_latex(tmp_path, browser_ok):
+    src = FIX / "latex"
+    before = (src / "main.tex").read_text()
+    doc = tmp_path / "doc"
+    run(SCRIPTS / "extract.py", src / "main.tex", doc)
+    texts = json.loads((doc / "texts.json").read_text())
+    blocks = json.loads((doc / "doc.json").read_text())["blocks"]
+    starts = lambda s: next(k for k, v in texts.items() if v.startswith(s))
+    para, abstract = starts("Forty-two participants"), starts("We tested 40")
+    tab = next(b for b in blocks if b["kind"] == "table")
+    ref = next(b for b in blocks if b["kind"] == "ref")
+    rows = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in tab["rows"])
+    edits = [
+        {"block": para, "text": texts[para].replace("from the clinic", "from two clinics")},
+        # the abstract uses a \newcommand macro next to the edited word
+        {"block": abstract, "text": texts[abstract].replace("connectivity decreased", "connectivity declined")},
+        {"block": tab["id"], "html": f'<div class="tcap">{tab["caption"]}</div><table>{rows.replace("42.1", "42.4")}</table>'},
+        {"block": ref["id"], "text": texts[ref["id"]].replace("Respiration", "Breathing")},
+    ]
+    for e in edits:
+        e.setdefault("html", e.get("text"))
+        e.setdefault("text", e["html"])
+    export = tmp_path / "export.json"
+    export.write_text(json.dumps({"format": "review-notes", "version": 2, "annotations": [], "edits": edits}))
+
+    out = tmp_path / "applied"
+    run(SCRIPTS / "apply_edits.py", doc, export, src, out)
+    patched = (out / "project" / "main.tex").read_text()
+    assert "from two clinics" in patched and "\\roi{} connectivity declined" in patched
+    assert "Active & 21 & 42.4" in patched
+    assert (src / "main.tex").read_text() == before, "the source must never be modified"
+    hunks = json.loads((out / "hunks.json").read_text())
+    assert sum(h["status"] == "applied" for h in hunks) == 3
+    manual = [h for h in hunks if h["status"] == "manual"]
+    assert len(manual) == 1 and manual[0]["block"] == ref["id"] and ".bib" in manual[0]["reason"]
+    diff = (out / "changes.diff").read_text().splitlines()
+    assert sum(l.startswith("+") and not l.startswith("+++") for l in diff) == 3
+    assert "Breathing" in (out / "apply_report.md").read_text()
+
+    report = tmp_path / "report.html"
+    run(SCRIPTS / "build_html.py", "report", doc, export, report, "--doc-name", "main.tex")
+    if browser_ok:
+        res = run(SCRIPTS / "smoke_test.py", report)
+        assert "readOnly: True" in res and "editedBlocks: 4" in res
 
 
 def test_invalid_anchor_is_rejected(tmp_path):

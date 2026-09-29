@@ -13,7 +13,7 @@ Claude Code, claude.ai and the Claude API.
 <!-- skills-index:start -->
 | Skill | Version | What it does |
 |---|---|---|
-| [`manuscript-review-annotator`](skills/manuscript-review-annotator/SKILL.md) | 1.1.0 | Review a research manuscript (Word .docx, LaTeX source or PDF) thoroughly and deliver the review as an interactive annotation page — the full paper with figures and tables, every issue pre-highlighted in the text or boxed on the figure, editable and shareable with co-authors — plus clean exports and a standalone read-only report. |
+| [`manuscript-review-annotator`](skills/manuscript-review-annotator/SKILL.md) | 1.2.0 | Review a research manuscript (Word .docx, LaTeX source or PDF) thoroughly and deliver the review as an interactive annotation page — the full paper with figures and tables, every issue pre-highlighted in the text or boxed on the figure, shareable with co-authors, who can also edit the manuscript text right in the page to address the notes (tracked changes, one-click suggestions) — plus clean exports, a standalone read-only report, and a patch that carries the page's text edits back into the LaTeX source. |
 <!-- skills-index:end -->
 
 The table and the Claude Code marketplace file are generated from each skill's `SKILL.md`

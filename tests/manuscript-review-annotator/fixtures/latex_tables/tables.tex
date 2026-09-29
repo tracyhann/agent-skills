@@ -1,0 +1,33 @@
+\documentclass{article}
+\usepackage{graphicx,array,booktabs,longtable}
+\begin{document}
+\section{Results}
+Scores are shown in Tables~\ref{tab:wide} and~\ref{tab:long}.
+\begin{table}[t]
+\caption{Scores by site.}
+\label{tab:wide}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3cm}rr@{}}
+\toprule
+\shortstack{Site\\name} & \multicolumn{1}{>{\centering\arraybackslash}p{2cm}}{Mean score} & N \\
+\midrule
+North clinic & 12.5 & 30 \\
+South clinic & 14.0 & 28 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{4cm}l@{}}
+\caption{Visit schedule.}\label{tab:long}\\
+\toprule
+Visit & Window \\
+\midrule
+\endfirsthead
+\toprule
+Visit & Window \\
+\midrule
+\endhead
+Baseline & Day 0 \\
+Follow-up & Week 4 \\
+\bottomrule
+\end{longtable}
+\end{document}
