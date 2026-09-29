@@ -6,8 +6,8 @@ Load a built page in headless Chromium and check it before publishing or sending
 
 --notes / --edits inject notes and text edits into the tool's browser-storage fallback so the
 live tool can be checked without the artifact database (reports already carry theirs).
---exercise-edits drives the text-editing features like a user would: edit a paragraph and
-save, check tracked changes and the "Show changes" toggle, apply a suggestion, open a note's
+--exercise-edits drives the text-editing features like a user would: set a signature for the
+session with "Signing as", edit a paragraph and save, check tracked changes and the "Show changes" toggle, apply a suggestion, open a note's
 "Edit text", reload and confirm everything persisted, and run hostile HTML through the
 sanitizer. Use it after changing the template.
 Fails (exit 1) on JavaScript errors, on any note whose quoted text no longer matches (notes whose
@@ -42,6 +42,7 @@ STATE_JS = """() => ({
   suggestionsShown: [...document.querySelectorAll('ins.sugg')].filter(x => getComputedStyle(x).display !== 'none').length,
   figures: document.querySelectorAll('figure').length, tables: document.querySelectorAll('.tbl').length,
   readOnly: document.body.classList.contains('report'),
+  signingAs: (() => { const b = document.querySelector('#sigBtn'); return b && getComputedStyle(b).display !== 'none' ? document.querySelector('#sigName').textContent : null; })(),
 })"""
 
 
@@ -56,6 +57,14 @@ def exercise(pg, ls_key):
 
     san = pg.evaluate("""() => sanitize('<b onclick="x()">a</b><img src=x onerror="alert(1)"><script>bad()</script><span class="link evil" style="color:red">l</span><math display="block" onload="x()"><mi>x</mi></math><a href="javascript:alert(1)">t</a>')""")
     check("sanitizer strips scripts/handlers", not re.search(r"onclick|onerror|onload|<img|<script|javascript:|style=|evil", san) and "<math" in san and "<b>a</b>" in san, san)
+
+    SIG = "cabbage"
+    before = pg.evaluate("() => document.querySelector('#sigName').textContent")
+    pg.click("#sigBtn")
+    pg.fill("#sigInput", SIG)
+    pg.click("#sigSave")
+    sg = pg.evaluate("() => ({ label: document.querySelector('#sigName').textContent, note: baseNote({}).author, open: document.querySelector('#sigPop').classList.contains('on') })")
+    check("Signing as sets this session's signature", before == "you" and sg["label"] == SIG and sg["note"] == SIG and not sg["open"], {"before": before, **sg})
 
     bid = pg.evaluate("""() => { const ps = [...document.querySelectorAll('.sheet p[data-block]')].filter(p => p.textContent.trim().length >= 20 && !p.querySelector('mark')).sort((a, b) => b.textContent.length - a.textContent.length); return ps[0] && ps[0].dataset.block; }""")
     check("found a paragraph to edit", bid, "no plain paragraph")
@@ -74,6 +83,7 @@ def exercise(pg, ls_key):
     check("save marks the block edited", st["edited"] and st["editable"] is None, st)
     check("inserted text shows as tracked change", "EDITCHECK" in st["ins"], st["ins"])
     check("edit persisted (browser storage)", "EDITCHECK" in st["stored"], st["stored"][:120])
+    check("the edit carries the session signature", f'"author":"{SIG}"' in st["stored"], st["stored"][:160])
     pg.click("#edits")
     off = pg.evaluate(f"""() => {{ const i = document.querySelector('{sel} ins.chg'); return getComputedStyle(i).borderBottomWidth; }}""")
     pg.click("#edits")
@@ -84,8 +94,9 @@ def exercise(pg, ls_key):
         nid = note["id"]
         pg.click(f'.note[data-id="{nid}"] [data-act="apply"]')
         pg.wait_for_timeout(400)
-        res = pg.evaluate(f"""() => {{ const all = JSON.parse(localStorage.getItem({json.dumps(ls_key)}) || '[]'); const n = all.find(x => x.id === {json.dumps(nid)}); const ed = JSON.parse(localStorage.getItem({json.dumps(ls_key + ':edits')}) || '[]').find(e => e.block === (n && n.block)); return {{ status: n && n.status, addressed: !!(n && n.addressedBy), inText: !!(ed && n && ed.text.includes(n.suggestion)) }}; }}""")
+        res = pg.evaluate(f"""() => {{ const all = JSON.parse(localStorage.getItem({json.dumps(ls_key)}) || '[]'); const n = all.find(x => x.id === {json.dumps(nid)}); const ed = JSON.parse(localStorage.getItem({json.dumps(ls_key + ':edits')}) || '[]').find(e => e.block === (n && n.block)); return {{ status: n && n.status, addressed: !!(n && n.addressedBy), by: n && n.addressedBy && n.addressedBy.author, inText: !!(ed && n && ed.text.includes(n.suggestion)) }}; }}""")
         check("Apply replaces the quoted text and closes the note", res["status"] == "done" and res["addressed"] and res["inText"], res)
+        check("the note records who addressed it", res["by"] == SIG, res)
     else:
         checks["Apply (no suggestion notes to test)"] = True
 
@@ -151,6 +162,9 @@ def main():
             checks["edits survive reload"] = ok
             if not ok:
                 fails.append(f"edits survive reload: {after}")
+            checks["the signature lasts for the session"] = after["signingAs"] == "cabbage"
+            if after["signingAs"] != "cabbage":
+                fails.append(f"the signature lasts for the session: {after['signingAs']!r}")
             r = after
         if a.shot:
             pg.screenshot(path=a.shot)

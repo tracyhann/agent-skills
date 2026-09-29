@@ -4,7 +4,7 @@ description: Review a research manuscript (Word .docx, LaTeX source or PDF) thor
 license: MIT
 compatibility: Python 3.10+ with pandoc, beautifulsoup4, lxml, pillow, pdfplumber and pypdfium2 (see requirements.txt); playwright for smoke tests. The live page needs the Artifact publishing tool (claude.ai); elsewhere deliver the standalone report.
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Manuscript review annotator
@@ -29,9 +29,10 @@ guidance in `references/` (read each when its step comes up).
   text layer, so check `outline.txt` and the figure crops after extraction. If the user has both
   a PDF and the source, use the source. Scanned PDFs (no text layer) are rejected; ask for the
   source or an OCR'd file.
-- Ask once, if not already known, how review notes should be signed. Use exactly the name the
-  user gives, including capitalization (e.g. "tracy"). Never sign notes as Claude: the
-  review goes out from the user and their team.
+- Signatures belong to whoever is asking in this session. If they say how their notes should be
+  signed, use exactly that, capitalization included (e.g. "cabbage"). Otherwise do not hold the
+  review up to ask: leave the signature off and the page shows their account name. Never reuse a
+  signature from an earlier session, another person or memory, and never sign notes as Claude.
 - Work in `/home/claude/review/` and write deliverables to `/mnt/user-data/outputs/`. Never
   delete user deliverables there; only remove temporary folders you created (e.g. `_notes`).
 
@@ -87,10 +88,12 @@ by eye routinely land on the wrong panel.
 
 ```bash
 python scripts/validate_notes.py /home/claude/review/doc /home/claude/review/draft.json /home/claude/review/seed \
-    --author "<signature>" --comments /home/claude/review/doc/comments.json
+    [--author "<signature>"] --comments /home/claude/review/doc/comments.json
 ```
-Fix every ERROR and rerun until it prints OK. Output: `seed/seeds.json`, one file per note,
-and `seed/batches/batch_N.json` for seeding.
+Pass `--author` only with a signature the person gave in this session. Without it the notes are
+marked as the requester's (`byOwner`) and the page shows the page owner's account name, which is
+the requester's once they publish it. Fix every ERROR and rerun until it prints OK. Output:
+`seed/seeds.json`, one file per note, and `seed/batches/batch_N.json` for seeding.
 
 ### 4. Build and test the page
 
@@ -119,8 +122,10 @@ Reply briefly, in prose: what the review found at the highest level (the few iss
 most), how many notes by category, and how to use the page (select text to highlight or
 comment, "Box on figure" to draw on figures, "Edit text" to change the manuscript and tick the
 notes an edit addresses, "Apply" on a suggestion, "Show changes" for tracked changes, notes and
-edits save automatically, export buttons). Mention that it is private until shared and can be
-shared within the organization. Do not paste the full list of notes into the chat; the page is
+edits save automatically, export buttons). Say how the notes are signed, and that everyone
+signs with their own account name unless they set a different signature for their session with
+"Signing as" in the toolbar. Mention that it is private until shared and can be shared within
+the organization. Do not paste the full list of notes into the chat; the page is
 the deliverable.
 
 ## Later requests on the same page
@@ -131,7 +136,7 @@ Read `references/artifact_ops.md` for the exact calls.
 |---|---|
 | "I finished reviewing; delete dismissed ones, keep the open ones in a clean source" | read notes back, `notes_ops.py batch --delete-status dismissed`, write_db, `notes_ops.py clean` → present .md and .json |
 | "Make a standalone report / bake the comments in" | read notes back, `build_html.py report` with author mapping, smoke test, present the file |
-| "Sign them as X" / "use my account name" | `notes_ops.py batch --relabel "old=X"` in the live tool; also rebuild any report |
+| "Sign them as X" / "use my account name" | `notes_ops.py batch --relabel "old=X"` in the live tool (`"=X"` signs Claude's unsigned notes; `"X="` returns them to the account name); also rebuild any report. For their own future notes, point them to "Signing as" |
 | "Change a colour / default / layout" | edit the template, rebuild, republish with the same `url` |
 | "Where is this stored? Who can see it? Do invitees' names show?" | answer from artifact_ops.md section 6 |
 | "Apply the edits from the page to my LaTeX / Overleaf project" | read the `edits` collection back, run `apply_edits.py DOC_DIR <edits dir> <project> OUT`, present `apply_report.md`, `changes.diff` and the changed files; say which changes need a manual fix and why (artifact_ops.md section 7) |
@@ -157,7 +162,9 @@ pandoc covers most papers, but these showed up on a real project and silently lo
 
 - Box coordinates estimated from a thumbnail were wrong three times; always run `lines` and `draw`.
 - A suggestion that repeated words outside the quote produced garbled inline edits.
-- Notes were first signed "Claude review"; the user wanted their own account name, lowercase.
+- Notes were first signed "Claude review", and later one session's signature was saved as a
+  default for the next. A signature is whatever the person using the skill or the page chose for
+  that session, else their account name: never Claude, never remembered from before.
 - Grey highlights for co-author comments were hard to read; teal is the default now.
 - Suggested edits should be visible on load in both the tool and the report.
 - Cleaning up `/mnt/user-data/outputs` once deleted files the user still needed.

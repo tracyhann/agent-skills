@@ -90,6 +90,13 @@ button{cursor:pointer}
 .btn{border:1px solid var(--rule); background:var(--paper); padding:6px 11px; border-radius:8px; font-size:13px; white-space:nowrap}
 .btn:hover{background:var(--chip)}
 .btn.primary{background:var(--accent); color:var(--accent-ink); border-color:var(--accent)}
+.sig{display:inline-flex; align-items:center; gap:6px; max-width:240px; font-size:13px; color:var(--ink2); border:1px dashed var(--rule); background:none; padding:5px 10px; border-radius:8px}
+.sig b{color:var(--ink); font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.sig:hover{background:var(--chip)} .sig[hidden], .report .sig, .report .sigpop{display:none!important}
+.sigpop{position:absolute; z-index:30; top:calc(100% + 6px); width:300px; max-width:calc(100vw - 24px); display:none; flex-direction:column; gap:8px; padding:12px; background:var(--paper); border:1px solid var(--rule); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.sigpop.on{display:flex} .sigpop label{font-size:13px; font-weight:600}
+.sigpop input{font:inherit; font-size:14px; padding:6px 8px; border:1px solid var(--rule); border-radius:7px; background:var(--paper); color:var(--ink)}
+.sigpop p{margin:0; font-size:12px; line-height:1.4; color:var(--ink2)} .sigpop .row{display:flex; gap:6px; justify-content:flex-end}
 .btn.primary:hover{filter:brightness(1.05)}
 .btn.danger{color:var(--del); border-color:color-mix(in srgb,var(--del) 45%,var(--rule))}
 .btn.small{padding:3px 8px; font-size:12px; border-radius:6px}
@@ -275,6 +282,13 @@ ins.chg{color:var(--ins); text-decoration:none; border-bottom:1.5px solid var(--
     </div>
     <button class="toggle" id="edits" aria-pressed="true" title="Show suggested wording and text edits as tracked changes"><span class="sw"></span>Show changes</button>
     <span class="spacer"></span>
+    <button class="sig" id="sigBtn" aria-haspopup="dialog"><span>Signing as</span><b id="sigName">you</b></button>
+    <div class="sigpop" id="sigPop" role="dialog" aria-label="Signature">
+      <label for="sigInput">Sign your notes and edits as</label>
+      <input id="sigInput" maxlength="40" autocomplete="off" spellcheck="false">
+      <p>For this session only. Leave it empty to use your account name. Notes and edits you already made keep their signature.</p>
+      <div class="row"><button class="btn" id="sigCancel">Cancel</button><button class="btn primary" id="sigSave">Save</button></div>
+    </div>
     <button class="btn" id="importBtn">Import JSON</button>
     <button class="btn" id="exportJson">Export JSON</button>
     <button class="btn" id="exportMd">Export report</button>
@@ -356,6 +370,7 @@ const S = {
   anns: new Map(), mode: 'text', showEdits: true, cats: new Set(), status: 'open', q: '',
   selected: null, editing: null, confirmDel: null,
   store: 'loading', readOnly: false, db: null, user: null, me: null, names: {},
+  sig: '', myName: '', ownerId: null,        // sig: this session's signature; ownerId: shows the notes Claude seeded unsigned
   edits: new Map(), ed: null,
 };
 
@@ -451,7 +466,7 @@ function matches(a) {
   if (S.status !== 'all' && a.status !== S.status) return false;
   if (S.q) {
     const q = S.q.toLowerCase();
-    const hay = [a.comment, a.suggestion, a.exact, loc.get(a.block), CAT[a.cat]?.name, a.author].join(' ').toLowerCase();
+    const hay = [a.comment, a.suggestion, a.exact, loc.get(a.block), CAT[a.cat]?.name, authorName(a)].join(' ').toLowerCase();
     if (!hay.includes(q)) return false;
   }
   return true;
@@ -517,9 +532,15 @@ function renderChips() {
   chips.innerHTML = CATS.filter(c => counts[c.id] || S.cats.has(c.id) || c.id === 'mine').map(c =>
     `<button class="chip cat-${c.id}" data-cat="${c.id}" aria-pressed="${S.cats.has(c.id)}"><span class="dot"></span>${esc(c.name)}<span class="n">${counts[c.id] || 0}</span></button>`).join('');
 }
+// A note shows its signature when it has one, else the account name of whoever wrote it (resolved
+// from their id at render time; names are never stored). Notes Claude seeded without a signature
+// (byOwner) show the page owner's account name.
+function authorKey(a) { return a.author ? '' : a.authorId || (a.byOwner ? S.ownerId || '' : ''); }
 function authorName(a) {
-  if (a.authorId) return (S.names[a.authorId] || '') || (S.me && a.authorId === S.me ? 'You' : 'Someone');
-  return a.author || 'You';
+  if (a.author) return a.author;
+  const id = authorKey(a);
+  if (id) return (S.names[id] || '') || (S.me && id === S.me ? 'You' : a.byOwner ? 'Page owner' : 'Someone');
+  return a.byOwner ? 'Page owner' : 'You';
 }
 function renderRail() {
   const all = allSorted();
@@ -568,7 +589,7 @@ function noteHTML(a) {
   }
   const comment = a.comment ? `<p class="comment">${esc(a.comment)}</p>` : a.suggestion ? '' : `<p class="comment blank">No comment</p>`;
   const sugg = a.suggestion ? `<p class="sugg-line"><span>Suggested: </span><ins>${esc(a.suggestion)}</ins></p>` : '';
-  const addr = a.addressedBy ? `<p class="addressed">Addressed by an edit${a.addressedBy.author ? ' (' + esc(a.addressedBy.author) + ')' : ''} \u00b7 <button data-act="showedit">Show</button></p>` : '';
+  const addr = a.addressedBy ? `<p class="addressed">Addressed by an edit (${esc(editAuthor(a.addressedBy))}) \u00b7 <button data-act="showedit">Show</button></p>` : '';
   const canEdit = !S.readOnly && (a.kind === 'text' || a.kind === 'box') && blockEls.has(a.block);
   let foot;
   if (S.confirmDel === a.id) {
@@ -582,17 +603,17 @@ function noteHTML(a) {
     foot = `${st}<button class="btn small" data-act="edit">Edit</button><button class="btn small danger" data-act="del">Delete</button>`;
   }
   return `<article class="note cat-${a.cat} st-${a.status}${S.selected === a.id ? ' sel' : ''}" data-id="${a.id}" role="listitem" tabindex="0">${head}${quote}${comment}${sugg}${addr}
-    <footer>${foot}<span class="by" data-author="${esc(a.authorId || '')}">${esc(authorName(a))}</span></footer></article>`;
+    <footer>${foot}<span class="by" data-author="${esc(authorKey(a))}">${esc(authorName(a))}</span></footer></article>`;
 }
 async function resolveNames(list) {
   if (!S.user) return;
-  const ids = [...new Set(list.map(a => a.authorId).filter(Boolean))];
+  const ids = [...new Set(list.map(authorKey).filter(Boolean))];
   if (!ids.length) return;
   const ps = await S.user.profiles(ids);
   for (const id of ids) {
     const nm = (ps[id] && ps[id].name) || '';
     S.names[id] = nm;
-    document.querySelectorAll(`.by[data-author="${CSS.escape(id)}"]`).forEach(s => s.textContent = nm || (ps[id]?.isMe ? 'You' : 'Someone'));
+    document.querySelectorAll(`.by[data-author="${CSS.escape(id)}"]`).forEach(s => s.textContent = nm || (ps[id]?.isMe ? 'You' : id === S.ownerId ? 'Page owner' : 'Someone'));
   }
 }
 
@@ -633,9 +654,43 @@ function setStore(kind) {
   el.classList.toggle('warn', kind === 'local');
   el.textContent = kind === 'db' ? (S.readOnly ? 'View only' : 'Saved automatically') : kind === 'local' ? 'Saved in this browser only' : 'Loading notes…';
 }
-function setReadOnly(v) { S.readOnly = v; setStore(S.store); render(); }
+function setReadOnly(v) { S.readOnly = v; setStore(S.store); renderSig(); render(); }
+
+/* ----- signature: each person may sign as they like for this session; otherwise their account name */
+const SIG_KEY = LS_KEY + ':sig';
+function loadSig() { try { return (sessionStorage.getItem(SIG_KEY) || '').trim(); } catch (_) { return ''; } }
+function authorFields() { return { author: S.sig || (S.me ? '' : 'You'), authorId: S.me || null }; }
+function renderSig() {
+  const b = $('#sigBtn');
+  b.hidden = S.readOnly;
+  $('#sigName').textContent = S.sig || S.myName || 'you';
+  b.title = S.sig ? `Your notes and edits in this session are signed \u201c${S.sig}\u201d. Click to change.`
+                  : 'Your notes and edits are signed with your account name. Click to sign differently for this session.';
+}
+function openSig() {
+  const p = $('#sigPop'), b = $('#sigBtn'), inp = $('#sigInput');
+  inp.value = S.sig; inp.placeholder = S.myName || 'Your name';
+  p.classList.add('on');
+  p.style.left = Math.max(8, Math.min(b.offsetLeft, b.parentElement.clientWidth - p.offsetWidth - 8)) + 'px';
+  inp.focus(); inp.select();
+}
+function closeSig() { $('#sigPop').classList.remove('on'); }
+function saveSig() {
+  S.sig = $('#sigInput').value.replace(/\s+/g, ' ').trim().slice(0, 40);
+  try { if (S.sig) sessionStorage.setItem(SIG_KEY, S.sig); else sessionStorage.removeItem(SIG_KEY); } catch (_) {}
+  closeSig(); renderSig();
+  toast(S.sig ? `Signing as \u201c${S.sig}\u201d for this session.` : 'Signing with your account name.');
+}
+$('#sigBtn').onclick = () => $('#sigPop').classList.contains('on') ? closeSig() : openSig();
+$('#sigSave').onclick = saveSig;
+$('#sigCancel').onclick = closeSig;
+$('#sigInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); saveSig(); } else if (e.key === 'Escape') { e.preventDefault(); closeSig(); }
+});
+document.addEventListener('mousedown', e => { if (!e.target.closest('#sigPop, #sigBtn')) closeSig(); });
 
 async function init() {
+  S.sig = loadSig(); renderSig();
   renderDoc(); render();
   let db = null;
   try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch (_) { db = null; }
@@ -662,9 +717,18 @@ async function init() {
     const user = window.claude.use ? await window.claude.use('user') : null;
     if (user) {
       S.user = user;
-      S.me = await user.id();
+      const me = await user.me();
+      S.me = me.id; S.myName = me.name || '';
       const can = await user.can('data.write');
       if (can === false) setReadOnly(true);
+      renderSig();
+      // Notes Claude seeded without a signature belong to whoever asked for the review, the page's
+      // owner: record the owner's id once (only the owner writes it) so everyone sees their name.
+      try {
+        const od = db.doc('meta/owner'), snap = await od.get();
+        S.ownerId = snap.exists ? (snap.data().id || null) : null;
+        if (me.isOwner && S.me && S.ownerId !== S.me && can !== false) { await od.set({ id: S.me }); S.ownerId = S.me; }
+      } catch (_) {}
       renderRail();
     }
   } catch (_) {}
@@ -674,7 +738,7 @@ async function init() {
 function newId() { return 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function baseNote(extra) {
   const now = new Date().toISOString();
-  return Object.assign({ id: newId(), cat: 'mine', comment: '', suggestion: '', status: 'open', author: S.me ? '' : 'You', authorId: S.me || null, createdAt: now, updatedAt: now, seq: Date.now() }, extra);
+  return Object.assign({ id: newId(), cat: 'mine', comment: '', suggestion: '', status: 'open', ...authorFields(), createdAt: now, updatedAt: now, seq: Date.now() }, extra);
 }
 function startEdit(id) {
   const a = S.anns.get(id); if (!a || S.readOnly) return;
@@ -808,8 +872,10 @@ function onPointerUp() {
 /* ----- export / import */
 function exportPayload() {
   const edits = [...S.edits.values()].sort((x, y) => (order.get(x.block) ?? 1e6) - (order.get(y.block) ?? 1e6))
-    .map(e => { const { history, ...rest } = e; return { ...rest, location: loc.get(e.block) || e.block }; });
-  return { format: '__SLUG__-review-notes', version: 2, exportedAt: new Date().toISOString(), annotations: allSorted().map(strip), edits };
+    .map(e => { const { history, ...rest } = e; return { ...rest, location: loc.get(e.block) || e.block, ...(e.author ? {} : { authorName: editAuthor(e) }) }; });
+  // authorName: the account names this viewer sees, for reports built from the file; never stored back
+  const annotations = allSorted().map(a => a.author ? strip(a) : { ...strip(a), authorName: authorName(a) });
+  return { format: '__SLUG__-review-notes', version: 2, exportedAt: new Date().toISOString(), annotations, edits };
 }
 function reportMarkdown() {
   const all = allSorted();
@@ -856,14 +922,14 @@ async function importFile(file) {
   if (!list) { toast('No notes found in that file.'); return; }
   const inEdits = data && Array.isArray(data.edits) ? data.edits.filter(e => e && e.block && blockEls.has(e.block) && typeof e.html === 'string') : [];
   for (const e of inEdits) {
-    const html = sanitize(e.html), doc = { ...e, html, text: textOfHTML(html) }; delete doc.location;
+    const html = sanitize(e.html), doc = { ...e, html, text: textOfHTML(html) }; delete doc.location; delete doc.authorName;
     S.edits.set(e.block, doc);
     if (S.store === 'db') await queue('e:' + e.block, () => S.db.collection(EDITS).doc(e.block).set(doc)); else saveLocalEdits();
   }
   if (inEdits.length) refreshEdits();
   let n = 0;
   const ok = list.filter(a => a && a.id && a.kind && (a.kind === 'note' || a.block));
-  const cleaned = ok.map(a => ({ ...a, status: a.status || 'open', cat: CAT[a.cat] ? a.cat : 'mine' }));
+  const cleaned = ok.map(({ authorName: _, ...a }) => ({ ...a, status: a.status || 'open', cat: CAT[a.cat] ? a.cat : 'mine' }));
   cleaned.forEach(c => S.anns.set(c.id, c)); n = cleaned.length;
   render(); toast(`Importing ${n} note${n === 1 ? '' : 's'}…`);
   if (S.store === 'db') {
@@ -1017,7 +1083,7 @@ function displayHTML(id) {
   const c = diffCache.get(id); if (c && c.key === e.updatedAt && c.src === e.html) return c.html;
   const html = diffBlockHTML(origClean(id), curHTML(id)); diffCache.set(id, { key: e.updatedAt, src: e.html, html }); return html;
 }
-function editAuthor(e) { if (e.authorId) return (S.names[e.authorId] || '') || (S.me && e.authorId === S.me ? 'you' : 'a co-author'); return e.author || 'you'; }
+function editAuthor(e) { if (e.author) return e.author; if (e.authorId) return (S.names[e.authorId] || '') || (S.me && e.authorId === S.me ? 'you' : 'a co-author'); return 'you'; }
 let prevEdited = new Set();
 function refreshEdits() {
   const ids = new Set([...prevEdited, ...S.edits.keys()]);
@@ -1140,7 +1206,7 @@ function writeEdit(block, html, addresses) {
   }
   const doc = {
     block, html, text: textOfHTML(html), baseText: origText.get(block) || '',
-    author: S.me ? '' : 'You', authorId: S.me || null, createdAt: prev?.createdAt || now, updatedAt: now,
+    ...authorFields(), createdAt: prev?.createdAt || now, updatedAt: now,
     addresses: [...new Set([...(prev?.addresses || []), ...addresses])],
     history: prev ? [...(prev.history || []), { html: prev.html, authorId: prev.authorId || null, author: prev.author || '', at: prev.updatedAt }].slice(-10) : [],
   };
@@ -1154,7 +1220,7 @@ function markAddressed(ids, block) {
   const now = new Date().toISOString();
   for (const id of ids) {
     const a = S.anns.get(id); if (!a || a.status !== 'open') continue;
-    persist({ ...a, status: 'done', addressedBy: { block, at: now, author: S.me ? '' : 'You', authorId: S.me || null } });
+    persist({ ...a, status: 'done', addressedBy: { block, at: now, ...authorFields() } });
   }
 }
 

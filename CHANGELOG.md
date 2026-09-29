@@ -7,6 +7,22 @@ CI, docs) are listed under "Repository" at the end.
 
 ## manuscript-review-annotator
 
+### 1.3.0 — 2026-09-29
+- Signatures follow whoever is using the skill or the page. "Signing as" in the page's toolbar
+  lets each person set a signature for their session (kept until the tab closes); otherwise
+  their notes, edits and "addressed by" records show their account name, looked up for each
+  viewer when the page draws and never stored.
+- Claude no longer has to ask for a signature before reviewing: `validate_notes.py --author` is
+  optional, and unsigned notes show the account name of the page owner (the person who asked
+  for the review). The owner's id is recorded once in `meta/owner` by their own view.
+- `notes_ops.py batch --relabel "=name"` signs only Claude's unsigned notes, never notes people
+  made in the page under their account name; `--relabel "name="` returns them to the account
+  name.
+- Export JSON includes the account names its viewer sees (`authorName`, dropped again on
+  import); `build_html.py report` uses them, and `--author-map "@owner=name"` names Claude's
+  unsigned notes. Unmapped account-signed notes show "Page owner" / "Reviewer" instead of "You".
+- Examples use "cabbage" as the sample signature; no signature is stored as a default.
+
 ### 1.2.0 — 2026-09-29
 - Edit the manuscript in the page to address notes: "Edit text" (shortcut E) makes any
   paragraph, heading, caption, table cell or reference editable in place; tick the notes the

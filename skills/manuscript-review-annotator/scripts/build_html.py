@@ -7,7 +7,7 @@ Live tool (published as an artifact; notes live in the artifact's database, neve
 
 Standalone read-only report (notes baked in; works offline; nothing to publish):
     python build_html.py report DOC_DIR NOTES OUT.html --doc-name "Paper_v3.docx" \
-        [--author-map "Claude review=tracy"] [--include-dismissed] [--date "September 28, 2026"]
+        [--author-map "Claude review=cabbage"] [--include-dismissed] [--date "September 28, 2026"]
   NOTES = a JSON export ({"annotations": [...], "edits": [...]} or a list), or the folder read_db
   wrote with out_dir (…/annotations/*.json). Text edits made in the page are baked in as tracked
   changes: they come from the export's "edits", or pass --edits with the folder read_db wrote
@@ -121,7 +121,7 @@ def main():
         tpl = tpl.replace(old, new)
     notes = load_notes(a.notes)
     amap = dict(m.split("=", 1) for m in a.author_map)
-    keep = []
+    keep, unsigned = [], []
     for n in notes:
         if n.get("status") == "dismissed" and not a.include_dismissed:
             continue
@@ -129,8 +129,14 @@ def main():
         au = n.get("author") or ""
         if "*" in amap:
             n["author"] = amap["*"]
-        elif au in amap:
+        elif au in amap and (au or not n.get("byOwner")):
             n["author"] = amap[au]
+        elif not au:   # signed by account name: use the name the page exported, else a mapping
+            n["author"] = n.get("authorName") or (amap.get("@owner") if n.get("byOwner") else "") or ""
+        if not n["author"]:
+            unsigned.append(n["id"])
+            n["author"] = "Page owner" if n.get("byOwner") else "Reviewer"
+        n.pop("authorName", None)
         keep.append(n)
     edits = load_edits(a.edits) if a.edits else (load_edits(a.notes, notes_file=True) if Path(a.notes).is_file() else [])
     for e in edits:
@@ -140,13 +146,17 @@ def main():
             e["author"] = amap["*"]
         elif au in amap:
             e["author"] = amap[au]
+        elif not au and e.get("authorName"):
+            e["author"] = e["authorName"]
+        e.pop("authorName", None)
     html = fill(tpl, a.doc_dir, a.doc_name, a.title).replace("__STATIC__", J({"notes": keep, "edits": edits, "date": a.date}))
     Path(a.out).write_text(html)
     from collections import Counter
     print(f"wrote {a.out} ({len(html) / 1e6:.2f} MB): {len(keep)} notes, {len(edits)} text edits, authors {dict(Counter(n.get('author', '') for n in keep))}")
-    blank = [n["id"] for n in keep if not n.get("author")]
-    if blank:
-        print(f"note: {len(blank)} notes have no author label (created in the tool by account); pass --author-map \"=name\" or \"*=name\"")
+    if unsigned:
+        print(f"note: {len(unsigned)} notes are signed by account name and the report cannot look names up, so they show "
+              f"\"Page owner\" / \"Reviewer\". Build from the page's Export JSON (it carries the names), or map them: "
+              f"--author-map \"@owner=name\" for the notes Claude seeded unsigned, \"=name\" for notes made in the page")
 
 
 if __name__ == "__main__":
