@@ -95,7 +95,7 @@ def test_pipeline(fixture, tmp_path, browser_ok):
         out = run(SCRIPTS / "smoke_test.py", tool, "--notes", seed / "seeds.json")
         assert "OK" in out and "orphans: []" in out
         out = run(SCRIPTS / "smoke_test.py", report)
-        assert "readOnly: True" in out
+        assert "readOnly: True" in out and "signingAs: None" in out
         out = run(SCRIPTS / "smoke_test.py", tool, "--notes", seed / "seeds.json", "--exercise-edits")
         assert "OK" in out and "FAIL" not in out and "PASS  Apply replaces the quoted text" in out
 
@@ -158,6 +158,49 @@ def test_edits_carry_back_to_latex(tmp_path, browser_ok):
     if browser_ok:
         res = run(SCRIPTS / "smoke_test.py", report)
         assert "readOnly: True" in res and "editedBlocks: 4" in res
+
+
+@pytest.mark.skipif(shutil.which("pandoc") is None, reason="pandoc not installed")
+def test_signatures_default_to_the_account_name(tmp_path):
+    """Without --author, Claude's notes are unsigned and shown under the page owner's account name;
+    an empty relabel touches only those, never notes people made in the page under their account."""
+    doc = tmp_path / "doc"
+    run(SCRIPTS / "extract.py", FIX / "sample.docx", doc)
+    draft = tmp_path / "draft.json"
+    draft.write_text(json.dumps([{"cat": "blocker", "kind": "note", "comment": "General note."},
+                                 {"cat": "typos", "exact": "Forty-two participants", "comment": "Wording."}]))
+    seed = tmp_path / "seed"
+    out = run(SCRIPTS / "validate_notes.py", doc, draft, seed)
+    assert "page owner account name" in out
+    seeds = json.loads((seed / "seeds.json").read_text())
+    assert all(n["author"] == "" and n["byOwner"] for n in seeds)
+
+    # the same notes after co-authors worked in the page: one signed for a session, one by account
+    notes = seeds + [
+        {**seeds[0], "id": "u1", "author": "Alex", "byOwner": False},
+        {**seeds[0], "id": "u2", "author": "", "authorId": "u_abc", "byOwner": False},
+    ]
+    live = tmp_path / "live.json"
+    live.write_text(json.dumps(notes))
+    r = subprocess.run([sys.executable, SCRIPTS / "notes_ops.py", "batch", live, "--relabel", "=cabbage"],
+                       capture_output=True, text=True, check=True)
+    writes = [w for line in r.stdout.splitlines() for w in json.loads(line)]
+    assert sorted(w["doc_id"] for w in writes) == sorted(n["id"] for n in seeds)
+    assert all(w["data"] == {"author": "cabbage"} for w in writes)
+    signed = tmp_path / "signed.json"
+    signed.write_text(json.dumps([{**n, "author": "cabbage", "byOwner": False} for n in seeds]))
+    r = subprocess.run([sys.executable, SCRIPTS / "notes_ops.py", "batch", signed, "--relabel", "cabbage="],
+                       capture_output=True, text=True, check=True)
+    writes = [w for line in r.stdout.splitlines() for w in json.loads(line)]
+    assert len(writes) == len(seeds) and all(w["data"] == {"author": "", "byOwner": True} for w in writes)
+
+    report = tmp_path / "report.html"
+    out = run(SCRIPTS / "build_html.py", "report", doc, live, report, "--doc-name", "sample.docx",
+              "--author-map", "@owner=cabbage")
+    static = json.loads(report.read_text().split("const STATIC = ", 1)[1].split(";\n", 1)[0].replace("<\\/", "</"))
+    by = {n["id"]: n["author"] for n in static["notes"]}
+    assert [by[n["id"]] for n in seeds] == ["cabbage", "cabbage"]
+    assert by["u1"] == "Alex" and by["u2"] == "Reviewer" and "1 notes are signed by account name" in out
 
 
 def test_invalid_anchor_is_rejected(tmp_path):

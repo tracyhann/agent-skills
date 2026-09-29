@@ -4,7 +4,11 @@ Resolve drafted review notes against the extracted manuscript, fail loudly on ba
 and write everything needed to seed the published tool.
 
 Usage:
-    python validate_notes.py DOC_DIR NOTES_DRAFT.json OUTDIR --author "tracy" [--comments DOC_DIR/comments.json]
+    python validate_notes.py DOC_DIR NOTES_DRAFT.json OUTDIR [--author "cabbage"] [--comments DOC_DIR/comments.json]
+
+--author is the signature the person asking for the review chose for this session, exactly as
+given. Without it the notes carry no signature and the page shows the account name of the page
+owner (the person who asked for the review) instead.
 
 NOTES_DRAFT.json is a list. Each item is one of:
     {"cat": "numbers", "exact": "z = 1.72, p = 0.043", "block": "b019"?, "occ": 0?,
@@ -29,7 +33,8 @@ CATS = {"blocker", "numbers", "stats", "figures", "framing", "refs", "typos", "c
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("doc_dir"); ap.add_argument("draft"); ap.add_argument("outdir")
-    ap.add_argument("--author", required=True, help="signature for review notes, exactly as the user wants it (case-sensitive)")
+    ap.add_argument("--author", default="", help="signature chosen for this session, exactly as given (case-sensitive); "
+                    "omit to show the page owner's account name")
     ap.add_argument("--comments", help="comments.json from extract.py, imported as co-author notes")
     ap.add_argument("--collection", default="annotations")
     a = ap.parse_args()
@@ -56,6 +61,8 @@ def main():
         n = {"kind": "text", "cat": cat, "comment": (d.get("comment") or "").strip(),
              "suggestion": (d.get("suggestion") or "").strip(), "status": "open",
              "author": d.get("author") or a.author}
+        if not n["author"]:
+            n["byOwner"] = True
         if d.get("kind") == "note":
             n.update(kind="note", block=None)
         elif "box" in d or "fig" in d:
@@ -131,6 +138,7 @@ def main():
         (od / "batches" / f"batch_{k // 50 + 1}.json").write_text(json.dumps(writes[k:k + 50]))
     from collections import Counter
     print(f"OK: {len(out)} notes ({dict(Counter(n['kind'] for n in out))}); categories {dict(Counter(n['cat'] for n in out))}")
+    print(f"signed: {dict(Counter(n['author'] or '(page owner account name)' for n in out))}")
     print(f"write_db batches: {(len(writes) + 49) // 50} in {od / 'batches'}")
 
 

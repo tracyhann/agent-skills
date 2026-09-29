@@ -101,8 +101,8 @@ stats.chi2.sf(x2, dof)            # chi-square
   the fix in the comment. (Quoting "≥ 1.72" and suggesting "|z|s ≥ 1.72" duplicates text.)
 - Figure problems get box notes. Place boxes from `check_boxes.py lines` output, then verify
   with `check_boxes.py draw`; eyeballed coordinates are usually off by a panel.
-- Write comments in a neutral, direct voice without "I". They are signed with the user's
-  name, not Claude's.
+- Write comments in a neutral, direct voice without "I". They go out under the requester's
+  signature or account name, never Claude's.
 - Existing reviewer comments (Word comments, PDF sticky notes and highlights) are imported
   with `--comments` as co-author notes with their original authors.
 

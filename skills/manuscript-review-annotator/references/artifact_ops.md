@@ -3,7 +3,9 @@
 The live tool is an Artifact page whose notes live in the artifact's database (collection
 `annotations`). Text edits made in the page live in a second collection, `edits` (one document
 per edited block, id = block id: `{block, html, text, baseText, author, authorId, addresses,
-createdAt, updatedAt, history}`), and short editing leases in `editlocks`. The page file never
+createdAt, updatedAt, history}`), short editing leases in `editlocks`, and the page owner's
+account id in `meta/owner` (written once by the owner's own view, so notes Claude seeded without
+a signature show the owner's account name to everyone). The page file never
 contains notes or edits, so everything co-authors do persists across republishes. All steps
 below use the Artifact tool.
 
@@ -23,7 +25,7 @@ below use the Artifact tool.
 2. Publish:
    - `file_path`: the built tool under `/mnt/user-data/outputs/`
    - `capabilities`: `{"db": {}, "downloads": true, "user": {"scopes": ["profile"]}}`
-     (db = shared notes, downloads = export buttons, user = author names on new notes)
+     (db = shared notes, downloads = export buttons, user = account names shown on notes)
    - `title`, `favicon` 🖍️, short `label`
    Keep the returned claude.ai link; every later operation needs it as `url`.
 3. Seed the notes: for each `batches/batch_N.json` from `validate_notes.py`, call
@@ -65,8 +67,10 @@ Edits: the same call with `collection: "edits"` (out_dir `…/_notes`), files la
 Only when the user asks.
 
 - Delete dismissed notes: `notes_ops.py batch <notes> --listing listing.txt --delete-status dismissed`
-- Relabel a signature: `notes_ops.py batch <notes> --listing listing.txt --relabel "Claude review=tracy"`
-  (signatures are case-sensitive; match the user's account name exactly)
+- Relabel a signature: `notes_ops.py batch <notes> --listing listing.txt --relabel "Claude review=cabbage"`
+  (case-sensitive; use exactly what the person asks for). `--relabel "=cabbage"` signs only the
+  notes Claude seeded unsigned; `--relabel "cabbage="` returns them to the owner's account name.
+  Notes people made in the page under their account name are never matched by an empty name.
 - Paste each printed array into `write_db` `db_op: "batch"`. A version conflict means someone
   edited the note meanwhile: re-read it and redo that write.
 - Verify with `read_db` query `where` (e.g. `[["author", "in", ["Claude review"]]]` returns nothing).
@@ -81,8 +85,11 @@ Only when the user asks.
 - Read-only: highlighting, boxes, editing and import are hidden; jump-to-note, category
   filters, search, suggested-edits toggle (on by default) and Markdown/JSON download remain.
 - Dismissed notes are excluded unless `--include-dismissed`.
-- Notes created in the tool carry an account id and an empty `author`; map them with
-  `--author-map "=name"` (or `"*=name"` to sign everything with one name).
+- Notes signed by account name have an empty `author` and the report cannot look names up. The
+  page's Export JSON carries the names its viewer sees (`authorName`), so build from that when
+  possible. Otherwise map them: `--author-map "@owner=name"` for notes Claude seeded unsigned
+  (ask the requester which name to show), `"=name"` for notes made in the page, `"*=name"` to
+  sign everything with one name. Unmapped ones show "Page owner" / "Reviewer".
 - Deliver with `present_files` (it is a file to keep or email; do not publish it).
 - It is a snapshot; rebuild it after further edits in the live tool.
 
@@ -94,8 +101,12 @@ Only when the user asks.
   (it only fetches Google Fonts when online). Files made in the chat are also stored with it.
 - Sharing: artifacts start private. Because this one uses a shared database it can only be
   shared inside the user's organization, not by public link.
-- Signatures: notes that invitees add are signed automatically with their account name.
-  Edits to existing notes keep the original signature (no "edited by" record unless added).
+- Signatures: everyone signs with their own account name unless they set a signature for their
+  session with "Signing as" in the toolbar (kept until they close the tab, never shared or
+  stored as a default). Notes and edits already made keep their signature; editing a note keeps
+  the original author (no "edited by" record). Account names are looked up for each viewer when
+  the page draws, never stored. Notes Claude seeded without a signature show the page owner's
+  account name.
 - Access: invitees without edit rights see the notes view-only and cannot edit the text.
 - Text edits: anyone who can write notes can edit the manuscript text in the page. One person
   edits a block at a time (a 45-second lease, renewed while they type). Each block keeps its

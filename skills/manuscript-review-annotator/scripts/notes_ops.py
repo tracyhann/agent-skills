@@ -9,11 +9,14 @@ and save the listing it prints (the lines `- "r001" ... version 2`) to a text fi
 because write_db needs each document's version to pin its writes.
 
 1) Clean source of the open notes (Markdown for reading, JSON the tool can import):
-    python notes_ops.py clean DOC_DIR /mnt/user-data/outputs/_notes/annotations OUTBASE [--author-map "Claude review=tracy"]
+    python notes_ops.py clean DOC_DIR /mnt/user-data/outputs/_notes/annotations OUTBASE [--author-map "Claude review=cabbage"]
 
 2) Batched write_db payloads (<= 50 writes each), pinned with if_version:
     python notes_ops.py batch /mnt/user-data/outputs/_notes/annotations --listing listing.txt --delete-status dismissed
-    python notes_ops.py batch /mnt/user-data/outputs/_notes/annotations --listing listing.txt --relabel "Claude review=tracy"
+    python notes_ops.py batch /mnt/user-data/outputs/_notes/annotations --listing listing.txt --relabel "Claude review=cabbage"
+   An empty old name, --relabel "=cabbage", signs only the notes Claude seeded without a signature
+   (they show the page owner's account name); --relabel "cabbage=" returns them to that. Notes
+   people made in the page under their account name are never touched by it.
    Prints each batch as JSON to paste into Artifact write_db (db_op "batch", writes=...).
 Delete the temporary _notes folder afterwards.
 """
@@ -58,11 +61,13 @@ def clean(a):
             frm = i + len(n["exact"])
         return (bi, 0, i)
     notes = sorted([n for n in load(a.notes) if n.get("status", "open") == "open"], key=pos)
-    keep = ["id", "kind", "cat", "block", "exact", "occ", "x", "y", "w", "h", "comment", "suggestion", "status", "author", "authorId", "seq"]
+    keep = ["id", "kind", "cat", "block", "exact", "occ", "x", "y", "w", "h", "comment", "suggestion", "status", "author", "authorId", "byOwner", "seq"]
     out = []
     for n in notes:
         m = {k: n[k] for k in keep if k in n and n[k] is not None}
-        if m.get("author", "") in amap: m["author"] = amap[m.get("author", "")]
+        au = m.get("author", "")
+        if au in amap and (au or not m.get("byOwner")): m["author"] = amap[au]
+        elif not au and m.get("byOwner") and "@owner" in amap: m["author"] = amap["@owner"]
         out.append(m)
     Path(a.outbase + ".json").write_text(json.dumps({"format": "review-notes", "version": 1, "annotations": out}, ensure_ascii=False, indent=1))
     q = lambda s: (s or "").replace("\n", " ").strip()
@@ -82,7 +87,8 @@ def clean(a):
         md.append(head + "  ")
         md.append((q(n.get("comment")) or "_(highlight, no comment)_") + ("  " if n.get("suggestion") else ""))
         if n.get("suggestion"): md.append(f"Suggested: {q(n['suggestion'])}")
-        if n.get("author"): md.append(f"_{n['author']}_")
+        by = n.get("author") or n.get("authorName") or ("page owner" if n.get("byOwner") else "")
+        if by: md.append(f"_{by}_")
         md.append("")
     Path(a.outbase + ".md").write_text("\n".join(md))
     print(f"wrote {a.outbase}.md and .json: {len(out)} open notes")
@@ -104,10 +110,16 @@ def batch(a):
     elif a.relabel:
         old, new = a.relabel.split("=", 1)
         for n in notes:
-            if (n.get("author") or "") == old:
-                w = {"op": "update", "collection": a.collection, "doc_id": n["id"], "data": {"author": new}}
-                if n["id"] in ver: w["if_version"] = ver[n["id"]]
-                writes.append(w)
+            if (n.get("author") or "") != old:
+                continue
+            if not old and (n.get("authorId") or not n.get("byOwner")):
+                continue      # "" means Claude's unsigned notes only, never someone's account-signed notes
+            data = {"author": new}
+            if not new and not n.get("authorId"):
+                data["byOwner"] = True
+            w = {"op": "update", "collection": a.collection, "doc_id": n["id"], "data": data}
+            if n["id"] in ver: w["if_version"] = ver[n["id"]]
+            writes.append(w)
     else:
         sys.exit("choose --delete-status or --relabel")
     missing = [w["doc_id"] for w in writes if "if_version" not in w]
