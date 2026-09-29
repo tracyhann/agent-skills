@@ -7,6 +7,31 @@ CI, docs) are listed under "Repository" at the end.
 
 ## manuscript-review-annotator
 
+### 1.2.0 — 2026-09-29
+- Edit the manuscript in the page to address notes: "Edit text" (shortcut E) makes any
+  paragraph, heading, caption, table cell or reference editable in place; tick the notes the
+  change resolves and they are marked done with a link back to the edit. A note's own
+  "Edit text" opens its block with the quote selected.
+- "Apply" on a suggestion now replaces the quoted text (it used to only mark the note done).
+  Suggestions that span table cells open the editor instead.
+- Edits are stored in a shared `edits` collection (last 10 versions each, "Use original" to
+  revert) with a 45-second lease per block so two people do not overwrite each other, and
+  are shown as tracked changes; "Show changes" toggles them.
+- Edit HTML is sanitized on save and on display (only text formatting and MathML survive).
+- Exports carry the edits (JSON version 2); the Markdown export lists each edit as a diff;
+  `build_html.py report --edits` bakes them into the read-only report.
+- New `scripts/apply_edits.py` carries page edits back to a LaTeX project: a patched copy,
+  `changes.diff`, `apply_report.md` (what was applied at which file:line, what needs a manual
+  fix and why) and `hunks.json` for Word tracked changes. The source is never modified.
+- LaTeX extraction: `>{...}`/`@{}` column specs, `\multicolumn` specs, `\resizebox` around a
+  tabular, `\shortstack`, `\rowcolor`/`\cellcolor` and longtable `\endfirsthead` headers no
+  longer drop cell text; pandoc is run with a timeout and retried without local `.sty`/`.cls`
+  files when it hangs; PDF figures included as `<embed>` are rasterised; a warning when fewer
+  figures come out than the source declares (figure floats and `\captionof{figure}`).
+- Numeric table cells are right-aligned instead of every column after the first.
+- `smoke_test.py --exercise-edits` drives the editing features (edit, save, tracked changes,
+  Apply, a table-cell Apply, a note's Edit text, reload, sanitizer); `--edits` seeds edits.
+
 ### 1.1.0 — 2026-09-28
 - Accept LaTeX source (`.tex`, or a zipped project with figures and `.bib`) and PDFs with a
   text layer, alongside Word files. One extractor (`scripts/extract.py`) handles all three.
@@ -29,6 +54,11 @@ CI, docs) are listed under "Repository" at the end.
   user's own name.
 
 ## Repository
+
+### 2026-09-29
+- Tests: a synthetic LaTeX tables fixture (`>{..}` column specs, `\resizebox`, `\shortstack`,
+  longtable head), a page-edits round trip through `apply_edits.py` and the baked report, and
+  `smoke_test.py --exercise-edits` on every input format.
 
 ### 2026-09-28
 - Published to GitHub under the MIT license.

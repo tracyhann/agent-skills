@@ -93,6 +93,10 @@ def write_outputs(out, blocks, imgs, figs, raw_comments):
                 b[k] = str(s)
         if b["kind"] == "table":
             b["rows"] = [[re.sub(r"<annotation.*?</annotation>", "", c, flags=re.S) for c in r] for r in b["rows"]]
+    for b in blocks:
+        m = re.fullmatch(r"\s*<p>(.*)</p>\s*", b.get("html") or "", re.S)
+        if b["kind"] in ("p", "ref", "title") and m and "<p>" not in m.group(1):
+            b["html"] = m.group(1)
     texts = {b["id"]: block_text(b) for b in blocks}
     comments = anchor_comments(raw_comments, texts)
     (out / "doc.json").write_text(json.dumps({"blocks": blocks}, ensure_ascii=False))
@@ -203,7 +207,7 @@ class Builder:
         self.last_fig = None
 
     def para(self, el):
-        imgs = el.find_all("img")
+        imgs = el.find_all(["img", "embed"])
         if imgs:  # each inline image in a paragraph is its own figure (Word places one per caption)
             for i in imgs:
                 im = self.resolve_img(i.get("src", ""))
@@ -271,7 +275,7 @@ class Builder:
                 cap_html = cap.decode_contents() if cap else ""
                 if cap:
                     cap.extract()
-                loaded = [x for x in (self.resolve_img(i.get("src", "")) for i in el.find_all("img")) if x is not None]
+                loaded = [x for x in (self.resolve_img(i.get("src", "")) for i in el.find_all(["img", "embed"])) if x is not None]
                 if loaded:
                     self.figure(loaded, cap_html)
                 elif el.find("table"):
@@ -299,8 +303,8 @@ class Builder:
                 self.para(el)
 
 
-def run_pandoc(args, cwd=None):
-    r = subprocess.run(["pandoc", *args], capture_output=True, text=True, cwd=cwd)
+def run_pandoc(args, cwd=None, timeout=None):
+    r = subprocess.run(["pandoc", *args], capture_output=True, text=True, cwd=cwd, timeout=timeout)
     if r.returncode != 0:
         sys.exit(f"pandoc failed:\n{r.stderr[-2000:]}")
     return r.stdout
@@ -414,6 +418,97 @@ def render_pdf_page(path, scale=3.0, page=0):
     return im.crop(bbox) if bbox else im
 
 
+def _group_end(s, i):
+    d, j = 0, i
+    while j < len(s):
+        c = s[j]
+        if c == "\\":
+            j += 2
+            continue
+        d += c == "{"
+        d -= c == "}"
+        j += 1
+        if d == 0:
+            return j
+    return len(s)
+
+
+def _ncols(spec):
+    n, i = 0, 0
+    while i < len(spec):
+        c = spec[i]
+        if c in "lcrXS":
+            n += 1; i += 1
+        elif c in "pmb" and "{" in spec[i:i + 2]:
+            n += 1; i = _group_end(spec, spec.index("{", i))
+        elif c in "><@!" and "{" in spec[i:i + 2]:
+            i = _group_end(spec, spec.index("{", i))
+        elif c == "*" and "{" in spec[i:i + 2]:
+            j = _group_end(spec, spec.index("{", i)); k = spec[spec.index("{", i) + 1:j - 1]
+            e = _group_end(spec, j); n += int(k) * _ncols(spec[j + 1:e - 1]) if k.strip().isdigit() else 0; i = e
+        else:
+            i += 1
+    return n
+
+
+def latex_prepass(tex):
+    """Rewrite table constructs pandoc silently drops content from (found on real manuscripts):
+    column specs with >{..}/@{..}/p{..} lose cell text, \\multicolumn specs likewise, \\shortstack's
+    \\\\ becomes a row break, \\resizebox hides the whole tabular, and a longtable's repeated
+    continuation head empties the table. Styling is irrelevant to the review page, so plain
+    columns are used."""
+    out, i = [], 0
+    pat = re.compile(r"\\begin\{(tabularx|tabular\*?|longtable)\}|\\multicolumn\{(\d+)\}")
+    while True:
+        m = pat.search(tex, i)
+        if not m:
+            out.append(tex[i:]); break
+        out.append(tex[i:m.start()]); j = m.end()
+        try:
+            if m.group(1):
+                env = m.group(1)
+                k = j
+                while k < len(tex) and tex[k].isspace():
+                    k += 1
+                if env in ("tabularx", "tabular*"):
+                    k = _group_end(tex, tex.index("{", k))
+                    while k < len(tex) and tex[k].isspace():
+                        k += 1
+                if tex[k] == "[":
+                    k = tex.index("]", k) + 1
+                e = _group_end(tex, tex.index("{", k))
+                ncol = _ncols(tex[tex.index("{", k) + 1:e - 1])
+                out.append("\\begin{" + ("tabular" if env != "longtable" else env) + "}{" + "l" * max(ncol, 1) + "}"); i = e
+            else:
+                e = _group_end(tex, tex.index("{", j))
+                out.append("\\multicolumn{" + m.group(2) + "}{l}"); i = e
+        except (ValueError, IndexError):
+            out.append(m.group(0)); i = m.end()
+    tex = "".join(out).replace("\\end{tabularx}", "\\end{tabular}").replace("\\end{tabular*}", "\\end{tabular}")
+    tex = re.sub(r"\\rowcolor(\[[^\]]*\])?\{[^}]*\}(\[[^\]]*\])*", "", tex)
+    tex = re.sub(r"\\cellcolor(\[[^\]]*\])?\{[^}]*\}", "", tex)
+    tex = re.sub(r"\\rule\{0pt\}\{[^}]*\}%?", "", tex)
+    tex = re.sub(r"\\shortstack(\[[^\]]*\])?\{((?:[^{}]|\{[^{}]*\})*)\}", lambda m: m.group(2).replace("\\\\", " "), tex)
+    tex = re.sub(r"\\resizebox\{[^{}]*\}\{[^{}]*\}\{%?\s*(\\begin\{tabular\}.*?\\end\{tabular\})%?\s*\}", lambda m: m.group(1), tex, flags=re.S)
+    tex = re.sub(r"\\endfirsthead.*?\\endhead", "", tex, flags=re.S)
+    return tex
+
+
+FIG_ENV = re.compile(r"\\begin\{(figure\*?|sidewaysfigure\*?|wrapfigure)\}(.*?)\\end\{\1\}", re.S)
+
+
+def declared_figures(tex):
+    """Figures a .tex file declares, counted the way they are extracted: one per figure float
+    (side-by-side sub-images in one float are one figure), or one per \\captionof{figure} when a
+    float holds several captioned minipages, plus each \\captionof{figure} outside floats."""
+    tex = re.sub(r"(?<!\\)%.*", "", tex)
+    n = 0
+    for m in FIG_ENV.finditer(tex):
+        if "\\includegraphics" in m.group(2):
+            n += max(1, m.group(2).count("\\captionof{figure}"))
+    return n + FIG_ENV.sub("", tex).count("\\captionof{figure}")
+
+
 def from_latex(path, out, max_w, main=None):
     src = Path(path)
     proj = Path(tempfile.mkdtemp(prefix="tex_"))
@@ -444,10 +539,23 @@ def from_latex(path, out, max_w, main=None):
     tex = mainf.read_text(errors="ignore")
     m = re.search(r"\\graphicspath\s*\{((?:\s*\{[^{}]*\})+)\s*\}", tex)
     gpaths = [mainf.parent] + [mainf.parent / d for d in (re.findall(r"\{([^{}]*)\}", m.group(1)) if m else [])]
+    for t in proj.rglob("*.tex"):
+        s0 = t.read_text(errors="ignore")
+        s1 = latex_prepass(s0)
+        if s1 != s0:
+            t.write_text(s1)
     args = ["-f", "latex", "-t", "html", "-s", "--wrap=none", "--mathml", "--number-sections", mainf.name]
     if list(proj.rglob("*.bib")):
         args.insert(-1, "--citeproc")
-    html = run_pandoc(args, cwd=mainf.parent)
+    try:
+        html = run_pandoc(args, cwd=mainf.parent, timeout=120)
+    except subprocess.TimeoutExpired:
+        # pandoc also parses local .sty/.cls files; heavy style files can send it into an endless loop
+        local = [p for p in proj.rglob("*") if p.suffix.lower() in (".sty", ".cls")]
+        print(f"WARNING: pandoc timed out; retrying without local style files {[p.name for p in local]} (layout only)", file=sys.stderr)
+        for p in local:
+            p.unlink()
+        html = run_pandoc(args, cwd=mainf.parent, timeout=120)
     soup = BeautifulSoup(html, "html.parser")
     body = soup.body or soup
 
@@ -475,6 +583,11 @@ def from_latex(path, out, max_w, main=None):
     b = Builder(max_w, resolve, number_captions=True)
     b.base = heading_base(body)
     b.walk(body.children)
+    n_src = sum(declared_figures(t.read_text(errors="ignore")) for t in proj.rglob("*.tex"))
+    if len(b.imgs) < n_src:
+        print(f"WARNING: the source declares {n_src} figures but {len(b.imgs)} were extracted. Figures inside "
+              "minipages with \\captionof, rotated floats (sidewaysfigure) or unused files are the usual causes; check outline.txt.",
+              file=sys.stderr)
     write_outputs(out, b.blocks, b.imgs, b.figs, [])
 
 

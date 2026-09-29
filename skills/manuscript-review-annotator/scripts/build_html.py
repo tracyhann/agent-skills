@@ -8,10 +8,12 @@ Live tool (published as an artifact; notes live in the artifact's database, neve
 Standalone read-only report (notes baked in; works offline; nothing to publish):
     python build_html.py report DOC_DIR NOTES OUT.html --doc-name "Paper_v3.docx" \
         [--author-map "Claude review=tracy"] [--include-dismissed] [--date "September 28, 2026"]
-  NOTES = a JSON export ({"annotations": [...]} or a list), or the folder read_db wrote
-  with out_dir (…/annotations/*.json).
+  NOTES = a JSON export ({"annotations": [...], "edits": [...]} or a list), or the folder read_db
+  wrote with out_dir (…/annotations/*.json). Text edits made in the page are baked in as tracked
+  changes: they come from the export's "edits", or pass --edits with the folder read_db wrote
+  for the "edits" collection (…/edits/*.json).
 
-Both pages open with "Suggested edits" switched on.
+Both pages open with "Show changes" switched on (suggestions and text edits shown as tracked changes).
 """
 import argparse, datetime, json, re
 from pathlib import Path
@@ -28,6 +30,8 @@ REPORT_PATCHES = [
      "    document.body.classList.add('report');\n"
      "    S.readOnly = true; S.status = 'all'; syncStatusSeg();\n"
      "    for (const a of STATIC.notes) S.anns.set(a.id, a);\n"
+     "    for (const e of (STATIC.edits || [])) S.edits.set(e.block, e);\n"
+     "    refreshEdits();\n"
      "    S.store = 'static';\n"
      "    $('#store').textContent = `Review snapshot: ${STATIC.notes.length} notes, ${STATIC.date}`;\n"
      "    render(); return;\n"
@@ -72,6 +76,16 @@ def fill(tpl, doc_dir, doc_name, title):
     return tpl.replace("__DOC__", J(doc)).replace("__IMGS__", J(imgs))
 
 
+def load_edits(src, notes_file=False):
+    p = Path(src)
+    if p.is_dir():
+        return [json.loads(f.read_text()) for f in sorted(p.glob("*.json"))]
+    d = json.loads(p.read_text())
+    if isinstance(d, dict):
+        return d.get("edits", [])
+    return [] if notes_file else d
+
+
 def load_notes(src):
     p = Path(src)
     if p.is_dir():
@@ -90,6 +104,7 @@ def main():
         s.add_argument("--doc-name", required=True); s.add_argument("--title")
     r.add_argument("--author-map", action="append", default=[], help='"old=new", repeatable; "*=name" relabels every author')
     r.add_argument("--include-dismissed", action="store_true")
+    r.add_argument("--edits", help="edits export/folder; default: the notes export's own \"edits\" list")
     r.add_argument("--date", default=datetime.date.today().strftime("%B %-d, %Y"))
     a = ap.parse_args()
 
@@ -117,10 +132,18 @@ def main():
         elif au in amap:
             n["author"] = amap[au]
         keep.append(n)
-    html = fill(tpl, a.doc_dir, a.doc_name, a.title).replace("__STATIC__", J({"notes": keep, "date": a.date}))
+    edits = load_edits(a.edits) if a.edits else (load_edits(a.notes, notes_file=True) if Path(a.notes).is_file() else [])
+    for e in edits:
+        e.pop("history", None)
+        au = e.get("author") or ""
+        if "*" in amap:
+            e["author"] = amap["*"]
+        elif au in amap:
+            e["author"] = amap[au]
+    html = fill(tpl, a.doc_dir, a.doc_name, a.title).replace("__STATIC__", J({"notes": keep, "edits": edits, "date": a.date}))
     Path(a.out).write_text(html)
     from collections import Counter
-    print(f"wrote {a.out} ({len(html) / 1e6:.2f} MB): {len(keep)} notes, authors {dict(Counter(n.get('author', '') for n in keep))}")
+    print(f"wrote {a.out} ({len(html) / 1e6:.2f} MB): {len(keep)} notes, {len(edits)} text edits, authors {dict(Counter(n.get('author', '') for n in keep))}")
     blank = [n["id"] for n in keep if not n.get("author")]
     if blank:
         print(f"note: {len(blank)} notes have no author label (created in the tool by account); pass --author-map \"=name\" or \"*=name\"")
