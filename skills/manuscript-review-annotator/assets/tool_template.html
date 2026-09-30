@@ -265,6 +265,7 @@ ins.chg{color:var(--ins); text-decoration:none; border-bottom:1.5px solid var(--
 .modal .row{display:flex; gap:8px; justify-content:flex-end}
 .sr{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0)}
 
+.report .bar > .seg, .report #importBtn, .report #addGeneral, .report #exportHtml, .report .pop, .report .rail-tools:has(#statusSeg){display:none!important}
 @media (max-width: 960px){
   .main{grid-template-columns:1fr}
   .rail{position:fixed; left:0; right:0; bottom:0; height:72%; border-left:0; border-top:1px solid var(--rule); border-radius:14px 14px 0 0; transform:translateY(105%); transition:transform .22s ease; z-index:15; box-shadow:0 -10px 30px rgba(0,0,0,.18); padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -287,7 +288,7 @@ ins.chg{color:var(--ins); text-decoration:none; border-bottom:1.5px solid var(--
 </style>
 </head>
 <body>
-<div class="app" id="app">
+<div data-shell class="app" id="app">
   <div class="bar">
     <div class="file"><b>__DOC_NAME__</b><span id="store">Loading notes…</span></div>
     <div class="seg" role="group" aria-label="Tool">
@@ -306,7 +307,8 @@ ins.chg{color:var(--ins); text-decoration:none; border-bottom:1.5px solid var(--
     </div>
     <button class="btn" id="importBtn">Import JSON</button>
     <button class="btn" id="exportJson">Export JSON</button>
-    <button class="btn" id="exportMd">Export report</button>
+    <button class="btn" id="exportMd" title="Download the notes, replies and text edits as a Markdown list">Export Markdown</button>
+    <button class="btn" id="exportHtml" title="Download a standalone, read-only copy of the paper with every note, reply and edit. It opens in any browser, offline.">Export HTML</button>
     <button class="btn notes-toggle" id="notesToggle">Notes</button>
     <input type="file" id="importFile" accept=".json,application/json" class="sr" tabindex="-1">
   </div>
@@ -333,12 +335,12 @@ ins.chg{color:var(--ins); text-decoration:none; border-bottom:1.5px solid var(--
     </aside>
   </div>
 </div>
-<div class="pop" id="pop" role="toolbar" aria-label="Annotate selection">
+<div data-shell class="pop" id="pop" role="toolbar" aria-label="Annotate selection">
   <button id="popHl"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 13h10M5.5 10.5l5-7 2 1.5-5 7H5.5z"/></svg>Highlight</button>
   <button id="popCm"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>Comment</button>
 </div>
-<div class="pop" id="popHint"><span class="note-hint">Select text within one paragraph</span></div>
-<div class="ebar" id="ebar" role="toolbar" aria-label="Edit text">
+<div data-shell class="pop" id="popHint"><span class="note-hint">Select text within one paragraph</span></div>
+<div data-shell class="ebar" id="ebar" role="toolbar" aria-label="Edit text">
   <span class="ebar-title" id="ebarTitle">Editing</span>
   <span class="ebar-notes" id="ebarNotes"></span>
   <span class="grow"></span>
@@ -346,8 +348,8 @@ ins.chg{color:var(--ins); text-decoration:none; border-bottom:1.5px solid var(--
   <button class="btn small" id="ebarCancel">Cancel</button>
   <button class="btn small primary" id="ebarSave" title="Save (Ctrl/Cmd+Enter)">Save edit</button>
 </div>
-<div class="toast" id="toast" role="status" aria-live="polite"></div>
-<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+<div data-shell class="toast" id="toast" role="status" aria-live="polite"></div>
+<div data-shell class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
   <div class="card">
     <b id="modalTitle">Export</b>
     <span style="font-size:13px;color:var(--ink2)" id="modalMsg">Copy the text below.</span>
@@ -359,6 +361,14 @@ ins.chg{color:var(--ins); text-decoration:none; border-bottom:1.5px solid var(--
 <script>
 const DOC = __DOC__;
 const IMGS = __IMGS__;
+// A standalone report carries its notes as data (window.REVIEW_SNAPSHOT) and runs read-only.
+const STATIC = window.REVIEW_SNAPSHOT || null;
+// The page's own parts, captured before anything renders, so "Export HTML" can write a copy of it.
+const SHELL = {
+  head: [...document.head.children].filter(el => el.matches('meta, title, style, link[href^="https://fonts."]')).map(el => el.outerHTML).join('\n'),
+  body: [...document.body.children].filter(el => el.hasAttribute('data-shell')).map(el => el.outerHTML).join('\n'),
+  js: document.currentScript ? document.currentScript.textContent : '',
+};
 const CATS = [
   {id:'blocker',  name:'Fix before sharing'},
   {id:'numbers',  name:'Numbers don\u2019t match'},
@@ -547,7 +557,7 @@ function renderChips() {
   for (const a of S.anns.values()) if (S.status === 'all' || a.status === S.status) counts[a.cat] = (counts[a.cat] || 0) + 1;
   const chips = $('#chips');
   chips.classList.toggle('filtering', S.cats.size > 0);
-  chips.innerHTML = CATS.filter(c => counts[c.id] || S.cats.has(c.id) || c.id === 'mine').map(c =>
+  chips.innerHTML = CATS.filter(c => counts[c.id] || S.cats.has(c.id) || (c.id === 'mine' && !S.readOnly)).map(c =>
     `<button class="chip cat-${c.id}" data-cat="${c.id}" aria-pressed="${S.cats.has(c.id)}"><span class="dot"></span>${esc(c.name)}<span class="n">${counts[c.id] || 0}</span></button>`).join('');
 }
 // A note shows its signature when it has one, else the account name of whoever wrote it (resolved
@@ -565,7 +575,7 @@ function renderRail() {
   renderChips();
   const list = all.filter(matches);
   const open = all.filter(a => a.status === 'open').length;
-  $('#count').textContent = `${list.length} shown, ${open} open of ${all.length}`;
+  $('#count').textContent = S.store === 'static' ? `${list.length} of ${all.length} notes` : `${list.length} shown, ${open} open of ${all.length}`;
   $('#notesToggle').textContent = `Notes (${open})`;
   const el = $('#list');
   const focus = document.activeElement && el.contains(document.activeElement) ? { id: document.activeElement.dataset.field, s: document.activeElement.selectionStart, e: document.activeElement.selectionEnd } : null;
@@ -792,6 +802,17 @@ document.addEventListener('mousedown', e => { if (!e.target.closest('#sigPop, #s
 async function init() {
   S.sig = loadSig(); renderSig();
   renderDoc(); render();
+  if (STATIC) {
+    document.body.classList.add('report');
+    S.readOnly = true; S.status = 'all'; syncStatusSeg(); renderSig();
+    for (const a of STATIC.notes || []) S.anns.set(a.id, a);
+    for (const e of STATIC.edits || []) S.edits.set(e.block, e);
+    for (const c of STATIC.replies || []) S.replies.set(c.id, c);
+    reindexReplies(); refreshEdits();
+    S.store = 'static';
+    $('#store').textContent = `Review snapshot: ${(STATIC.notes || []).length} notes, ${STATIC.date || ''}`;
+    render(); return;
+  }
   let db = null;
   try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch (_) { db = null; }
   if (!db) {
@@ -1018,12 +1039,26 @@ function reportMarkdown() {
   }
   return md;
 }
+const MIME = { json: 'application/json', md: 'text/markdown', html: 'text/html' };
 async function offer(filename, data, title) {
+  const type = MIME[filename.split('.').pop()] || 'text/plain';
+  if (!window.claude) {                            // e.g. a downloaded report opened from disk
+    try {
+      const url = URL.createObjectURL(new Blob([data], { type }));
+      const a = document.createElement('a'); a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000); toast('Saved ' + filename); return;
+    } catch (_) {}
+  }
   let dl = null;
   try { dl = window.claude && window.claude.use ? await window.claude.use('downloads') : null; } catch (_) {}
   if (dl) {
-    try { await dl.save({ filename, data }); toast('Saved ' + filename); return; }
-    catch (e) { if (e && e.code === 'declined') return; if (e && e.code === 'rate_limited') { toast('A save prompt is already open.'); return; } }
+    try { await dl.save({ filename, data: data.length > 1e6 ? new Blob([data], { type }) : data }); toast('Saved ' + filename); return; }
+    catch (e) {
+      if (e && e.code === 'declined') return;
+      if (e && e.code === 'rate_limited') { toast('A save prompt is already open.'); return; }
+      if (e && e.code === 'extension_not_enabled') { toast('Saving .' + filename.split('.').pop() + ' files isn\u2019t available here.'); return; }
+    }
   }
   $('#modalTitle').textContent = title;
   $('#modalMsg').textContent = 'Downloads aren\u2019t available here. Copy the text below and save it as ' + filename + '.';
@@ -1081,7 +1116,41 @@ $('#modeBox').onclick = () => setMode('box');
 $('#modeEdit').onclick = () => setMode('edit');
 $('#edits').onclick = e => { S.showEdits = !S.showEdits; e.currentTarget.setAttribute('aria-pressed', S.showEdits); $('#sheet').classList.toggle('show-edits', S.showEdits); };
 $('#exportJson').onclick = () => offer('__EXPORT_BASE__.json', JSON.stringify(exportPayload(), null, 1), 'Export JSON');
-$('#exportMd').onclick = () => { numbers = new Map(allSorted().map((a, i) => [a.id, i + 1])); offer('__EXPORT_BASE__.md', reportMarkdown(), 'Export report'); };
+$('#exportMd').onclick = () => { numbers = new Map(allSorted().map((a, i) => [a.id, i + 1])); offer('__EXPORT_BASE__.md', reportMarkdown(), 'Export Markdown'); };
+/* ----- "Export HTML": a standalone, read-only copy of this page with the notes (except dismissed
+   ones), replies and text edits baked in. Items signed by account name carry the name this viewer
+   sees, since a file opened offline cannot look names up. It is this page's own markup and script
+   plus a snapshot of the data. */
+async function reportSnapshot() {
+  const kept = allSorted().filter(a => a.status !== 'dismissed');
+  const keptIds = new Set(kept.map(a => a.id));
+  const replies = [...S.replies.values()].filter(r => keptIds.has(r.note))
+    .sort((x, y) => String(x.createdAt || '').localeCompare(String(y.createdAt || '')) || String(x.id).localeCompare(String(y.id)));
+  const edits = [...S.edits.values()];
+  const byAcct = [...kept, ...replies].map(authorKey)
+    .concat([...edits, ...kept.map(a => a.addressedBy).filter(Boolean)].map(o => o.author ? '' : o.authorId || ''));
+  const todo = [...new Set(byAcct.filter(Boolean))].filter(id => !(id in S.names));
+  if (S.user && todo.length) { try { const ps = await S.user.profiles(todo); for (const id of todo) S.names[id] = (ps[id] && ps[id].name) || ''; } catch (_) {} }
+  const named = o => (o.author ? o : { ...o, author: authorName(o) });
+  const namedEdit = o => (o.author ? o : { ...o, author: editAuthor(o) });
+  return {
+    notes: kept.map(a => { const n = named(strip(a)); if (n.addressedBy) n.addressedBy = namedEdit(n.addressedBy); return n; }),
+    replies: replies.map(named),
+    edits: edits.map(({ history, ...e }) => namedEdit(e)),
+    date: new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }),
+  };
+}
+function reportHTML(snap) {
+  const json = JSON.stringify(snap).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  const title = esc(document.title.replace(/ \(snapshot\)$/, '') + ' (snapshot)');
+  const head = SHELL.head.replace(/<title>[\s\S]*?<\/title>/, `<title>${title}</title>`);
+  return `<!doctype html>\n<html lang="en">\n<head>\n${head}\n</head>\n<body>\n${SHELL.body}\n<script>window.REVIEW_SNAPSHOT = ${json};<\/script>\n<script>${SHELL.js}<\/script>\n</body>\n</html>\n`;
+}
+$('#exportHtml').onclick = async () => {
+  if (!SHELL.js) { toast('This page can\u2019t copy itself here; use Export JSON instead.'); return; }
+  toast('Preparing the report\u2026');
+  offer('__EXPORT_BASE__.html', reportHTML(await reportSnapshot()), 'Export HTML');
+};
 $('#importBtn').onclick = () => { if (S.readOnly) return toast('You can view these notes but not change them.'); $('#importFile').click(); };
 $('#importFile').onchange = e => { const f = e.target.files[0]; if (f) importFile(f); e.target.value = ''; };
 $('#notesToggle').onclick = () => $('#rail').classList.toggle('open');
@@ -1189,7 +1258,7 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (e.key === 'Escape') { hidePop(); setMode('text'); $('#modal').classList.remove('on'); closeRailMobile(); }
-  else if (e.key === 'b' || e.key === 'B') setMode(S.mode === 'box' ? 'text' : 'box');
+  else if ((e.key === 'b' || e.key === 'B') && !S.readOnly) setMode(S.mode === 'box' ? 'text' : 'box');
   else if (e.key === 't' || e.key === 'T') setMode('text');
   else if ((e.key === 'e' || e.key === 'E') && !S.readOnly && !document.body.classList.contains('report')) setMode('edit');
 });

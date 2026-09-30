@@ -43,7 +43,8 @@ republish and could not be edited or deleted by collaborators.
 ## 2. Change the page later
 
 Edit `assets/tool_template.html` (or a copy), rebuild with `build_html.py tool`, smoke-test
-(with `--exercise-edits --exercise-comments` if the editing, reply or signature code changed),
+(with `--exercise-edits --exercise-comments --exercise-report` if the editing, reply,
+signature or export code changed),
 then publish with the same `file_path` plus `url`. Omit `capabilities` to keep the stored
 declaration. Notes, replies and edits are untouched.
 
@@ -90,6 +91,11 @@ Only when the user asks.
   thread (read from the sibling `_notes/replies`, or `--replies`). Present both.
 
 ## 5. Standalone report
+
+In the page, "Export HTML" downloads one: the page's own markup and script with the notes
+(except dismissed ones), replies and text edits baked in (`window.REVIEW_SNAPSHOT`), and items
+signed by account name carrying the name the exporter sees. It opens offline, read-only, and reads
+the same for anyone. Build one yourself only when working from read_db output or relabelling names:
 
 `build_html.py report DOC_DIR <notes> OUT.html --doc-name ... --author-map ... [--edits _notes/edits]`
 - Text edits are baked in as tracked changes and reply threads under their notes: they are
