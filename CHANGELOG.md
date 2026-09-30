@@ -7,6 +7,14 @@ CI, docs) are listed under "Repository" at the end.
 
 ## manuscript-review-annotator
 
+### 1.4.1 — 2026-09-30
+- Fix: "Export HTML" in a published page produced an unstyled report with no title. The artifact
+  viewer serves the page inside its own document, where the browser moves the page's stylesheet
+  and font links into `<body>`, and the export copied styles only from `<head>`. The page now
+  collects them from the whole document, so the report looks like the annotation page.
+- `smoke_test.py --exercise-report` checks that the exported report keeps the page's styling,
+  and exports a second time from the page wrapped the way the viewer serves it.
+
 ### 1.4.0 — 2026-09-29
 - "Export HTML" in the page: one click downloads a standalone, read-only copy of the paper with
   every note (except dismissed ones), reply thread and text edit, with account-signed items

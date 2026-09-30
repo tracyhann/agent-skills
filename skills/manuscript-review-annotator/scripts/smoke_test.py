@@ -17,7 +17,9 @@ session with "Signing as", edit a paragraph and save, check tracked changes and 
 sanitizer. Use it after changing the template.
 --exercise-report clicks "Export HTML", opens the downloaded file from disk with the network cut
 off, and checks it runs read-only, without errors, with every note (except dismissed ones),
-reply and text edit, and without the editing controls.
+reply and text edit, without the editing controls, and with the page's styling. It then exports
+again from the page wrapped the way the artifact viewer serves it, and checks that report is
+styled too.
 Fails (exit 1) on JavaScript errors, on any note whose quoted text no longer matches (notes whose
 text was changed by an edit are fine), or on a failed editing check.
 Requires playwright + chromium.
@@ -196,23 +198,29 @@ def exercise_comments(pg, ls_key):
     return checks, fails
 
 
-def exercise_report(pg):
-    """Export HTML from the tool, open the file offline, check it; returns (checks, failures)."""
-    checks, fails = {}, []
+# The artifact viewer serves a published page inside its own document, like this. The browser then
+# moves the page's <style> and font links into <body>, which an export must still pick up.
+VIEWER_WRAP = ('<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1">'
+               '<style>:root{color-scheme:light}body{margin:0;font:14px -apple-system,sans-serif;background:#faf9f5;color:#141413}</style>'
+               '</head><body>\n{page}\n</body></html>')
 
-    def check(name, ok, detail=""):
-        checks[name] = bool(ok)
-        if not ok:
-            fails.append(f"{name}: {detail}")
+# The page's own stylesheet is applied: the notes rail is laid out and the manuscript is set in the document face.
+STYLED_JS = """() => { const rail = document.querySelector('.rail'), sheet = document.querySelector('.sheet');
+  return !!rail && getComputedStyle(rail).display === 'flex' && !!sheet && getComputedStyle(sheet).fontFamily.includes('Literata'); }"""
 
-    want = pg.evaluate("""() => { const kept = new Set([...S.anns.values()].filter(a => a.status !== 'dismissed').map(a => a.id));
-      return { notes: kept.size, replies: [...S.replies.values()].filter(r => kept.has(r.note)).length, edits: S.edits.size }; }""")
+
+def export_report(pg):
+    """Click "Export HTML" and save the download; returns its path."""
     with pg.expect_download() as info:
         pg.click("#exportHtml")
     path = Path(tempfile.mkdtemp()) / info.value.suggested_filename
     info.value.save_as(path)
-    check("Export HTML downloads one standalone file", path.suffix == ".html" and path.stat().st_size > 2000, path.name)
-    ctx = pg.context.browser.new_context(viewport={"width": 1280, "height": 800})
+    return path
+
+
+def open_offline(browser, path):
+    """Open a saved report from disk with the network cut off; returns (state, page errors)."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
     ctx.route("**/*", lambda r: r.continue_() if r.request.url.startswith("file:") else r.abort())
     rp = ctx.new_page()
     errs = []
@@ -223,12 +231,46 @@ def exercise_report(pg):
       return { readOnly: document.body.classList.contains('report'), notes: S.anns.size, replies: S.replies.size, edits: S.edits.size,
         title: document.title, hidden: ['#exportHtml', '#modeEdit', '#importBtn', '#addGeneral', '#sigBtn'].every(gone),
         replyButtons: document.querySelectorAll('[data-act="reply"]').length }; }""")
+    got["styled"] = rp.evaluate(STYLED_JS)
     ctx.close()
+    return got, errs
+
+
+def exercise_report(pg, page):
+    """Export HTML from the tool, open the file offline, check it; then export again from the page
+    wrapped the way the artifact viewer serves it. Returns (checks, failures)."""
+    checks, fails = {}, []
+
+    def check(name, ok, detail=""):
+        checks[name] = bool(ok)
+        if not ok:
+            fails.append(f"{name}: {detail}")
+
+    want = pg.evaluate("""() => { const kept = new Set([...S.anns.values()].filter(a => a.status !== 'dismissed').map(a => a.id));
+      return { notes: kept.size, replies: [...S.replies.values()].filter(r => kept.has(r.note)).length, edits: S.edits.size }; }""")
+    path = export_report(pg)
+    check("Export HTML downloads one standalone file", path.suffix == ".html" and path.stat().st_size > 2000, path.name)
+    browser = pg.context.browser
+    got, errs = open_offline(browser, path)
     check("the report opens offline without errors", not errs and got["readOnly"], {"errors": errs[:2], **got})
     check("the report carries every note, reply and text edit", (got["notes"], got["replies"], got["edits"]) == (want["notes"], want["replies"], want["edits"]),
           {"want": want, "got": got})
     check("the report has no editing, signing or reply controls", got["hidden"] and got["replyButtons"] == 0, got)
     check("the report is titled as a snapshot", got["title"].endswith("(snapshot)"), got["title"])
+    check("the report keeps the page's styling", got["styled"], got)
+
+    wrapped = Path(tempfile.mkdtemp()) / page.name
+    wrapped.write_text(VIEWER_WRAP.replace("{page}", page.read_text()))
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800}, accept_downloads=True)
+    ctx.route("**/fonts.googleapis.com/**", lambda r: r.abort())
+    wp = ctx.new_page()
+    wp.goto(wrapped.as_uri())
+    wp.wait_for_timeout(1500)
+    live_styled = wp.evaluate(STYLED_JS)
+    got2, errs2 = open_offline(browser, export_report(wp))
+    ctx.close()
+    check("an export made inside the viewer's wrapper keeps the page's styling",
+          live_styled and got2["styled"] and got2["readOnly"] and not errs2, {"page styled": live_styled, "errors": errs2[:2], **got2})
     return checks, fails
 
 
@@ -291,7 +333,7 @@ def main():
             checks.update(c2); fails += f2
             r = pg.evaluate(STATE_JS)
         if a.exercise_report:
-            c3, f3 = exercise_report(pg)
+            c3, f3 = exercise_report(pg, page)
             checks.update(c3); fails += f3
         if a.shot:
             pg.screenshot(path=a.shot)
