@@ -22,6 +22,20 @@ CI, docs) are listed under "Repository" at the end.
   import); `build_html.py report` uses them, and `--author-map "@owner=name"` names Claude's
   unsigned notes. Unmapped account-signed notes show "Page owner" / "Reviewer" instead of "You".
 - Examples use "cabbage" as the sample signature; no signature is stored as a default.
+- Reply threads on notes: "Reply" under any note, stored and shown as plain text, signed like
+  notes (session signature, else account name; a session signature shows the account name on
+  hover). People can edit or delete their own replies; long threads show the latest two
+  ("Show N earlier replies"); search covers replies; deleting a note deletes its replies.
+  Replies live in their own `replies` collection (one document per reply), so simultaneous
+  replies never overwrite each other.
+- `validate_notes.py`: a drafted note can carry `"replies"` (text, author, date), written to
+  `replies.json` and seeded in the same write batches (ids `r001-c1`, …).
+- Exports carry replies (JSON version 3, with `authorName` for account-signed ones); the Markdown
+  export quotes each thread under its note; `build_html.py report` bakes threads in (`--replies`,
+  or the sibling `_notes/replies` folder) and names them like notes; `notes_ops.py clean`
+  includes each note's thread.
+- `smoke_test.py --exercise-comments` drives reply threads (session signature, post, edit,
+  search, reload, delete, hostile HTML in a reply); `--replies` seeds threads.
 
 ### 1.2.0 — 2026-09-29
 - Edit the manuscript in the page to address notes: "Edit text" (shortcut E) makes any

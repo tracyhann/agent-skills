@@ -8,10 +8,11 @@ Live tool (published as an artifact; notes live in the artifact's database, neve
 Standalone read-only report (notes baked in; works offline; nothing to publish):
     python build_html.py report DOC_DIR NOTES OUT.html --doc-name "Paper_v3.docx" \
         [--author-map "Claude review=cabbage"] [--include-dismissed] [--date "September 28, 2026"]
-  NOTES = a JSON export ({"annotations": [...], "edits": [...]} or a list), or the folder read_db
-  wrote with out_dir (…/annotations/*.json). Text edits made in the page are baked in as tracked
-  changes: they come from the export's "edits", or pass --edits with the folder read_db wrote
-  for the "edits" collection (…/edits/*.json).
+  NOTES = a JSON export ({"annotations": [...], "edits": [...], "replies": [...]} or a list), or the
+  folder read_db wrote with out_dir (…/annotations/*.json). Text edits made in the page are baked
+  in as tracked changes and reply threads under their notes: they come from the export's
+  "edits"/"replies", from the sibling edits/ and replies/ folders read_db wrote next to
+  annotations/, or from --edits / --replies. Replies are signed like notes (see --author-map).
 
 Both pages open with "Show changes" switched on (suggestions and text edits shown as tracked changes).
 """
@@ -31,7 +32,8 @@ REPORT_PATCHES = [
      "    S.readOnly = true; S.status = 'all'; syncStatusSeg();\n"
      "    for (const a of STATIC.notes) S.anns.set(a.id, a);\n"
      "    for (const e of (STATIC.edits || [])) S.edits.set(e.block, e);\n"
-     "    refreshEdits();\n"
+     "    for (const c of (STATIC.replies || [])) S.replies.set(c.id, c);\n"
+     "    reindexReplies(); refreshEdits();\n"
      "    S.store = 'static';\n"
      "    $('#store').textContent = `Review snapshot: ${STATIC.notes.length} notes, ${STATIC.date}`;\n"
      "    render(); return;\n"
@@ -86,9 +88,48 @@ def load_edits(src, notes_file=False):
     return [] if notes_file else d
 
 
+def load_replies(src, notes_file=False):
+    p = Path(src)
+    if p.is_dir():
+        return [json.loads(f.read_text()) for f in sorted(p.glob("*.json"))]
+    d = json.loads(p.read_text())
+    if isinstance(d, dict):
+        return d.get("replies", [])
+    return [] if notes_file else d
+
+
+def sibling(src, name):
+    """read_db writes each collection to <out_dir>/<collection>/: given .../annotations (or the
+    out_dir itself), find another collection's folder next to it."""
+    p = Path(src)
+    if not p.is_dir():
+        return None
+    root = p.parent if p.name == "annotations" else p
+    return root / name if (root / name).is_dir() else None
+
+
+def sign(n, amap, unsigned):
+    """The label a note or reply shows in the report: its signature, else the account name the
+    page exported (authorName), else a mapping; "Page owner" / "Reviewer" when nothing names it."""
+    au = n.get("author") or ""
+    if "*" in amap:
+        n["author"] = amap["*"]
+    elif au in amap and (au or not n.get("byOwner")):
+        n["author"] = amap[au]
+    elif not au:   # signed by account name: use the name the page exported, else a mapping
+        n["author"] = n.get("authorName") or (amap.get("@owner") if n.get("byOwner") else "") or ""
+    if not n["author"]:
+        unsigned.append(n["id"])
+        n["author"] = "Page owner" if n.get("byOwner") else "Reviewer"
+    n.pop("authorName", None)
+    return n
+
+
 def load_notes(src):
     p = Path(src)
     if p.is_dir():
+        if (p / "annotations").is_dir():
+            p = p / "annotations"
         files = sorted(p.glob("*.json")) or sorted(p.glob("*/*.json"))
         return [json.loads(f.read_text()) for f in files]
     d = json.loads(p.read_text())
@@ -105,6 +146,7 @@ def main():
     r.add_argument("--author-map", action="append", default=[], help='"old=new", repeatable; "*=name" relabels every author')
     r.add_argument("--include-dismissed", action="store_true")
     r.add_argument("--edits", help="edits export/folder; default: the notes export's own \"edits\" list")
+    r.add_argument("--replies", help="replies export/folder; default: the notes export's own \"replies\" list")
     r.add_argument("--date", default=datetime.date.today().strftime("%B %-d, %Y"))
     a = ap.parse_args()
 
@@ -126,19 +168,13 @@ def main():
         if n.get("status") == "dismissed" and not a.include_dismissed:
             continue
         n = {k: v for k, v in n.items() if k not in ("authorId", "createdAt", "updatedAt")}
-        au = n.get("author") or ""
-        if "*" in amap:
-            n["author"] = amap["*"]
-        elif au in amap and (au or not n.get("byOwner")):
-            n["author"] = amap[au]
-        elif not au:   # signed by account name: use the name the page exported, else a mapping
-            n["author"] = n.get("authorName") or (amap.get("@owner") if n.get("byOwner") else "") or ""
-        if not n["author"]:
-            unsigned.append(n["id"])
-            n["author"] = "Page owner" if n.get("byOwner") else "Reviewer"
-        n.pop("authorName", None)
-        keep.append(n)
-    edits = load_edits(a.edits) if a.edits else (load_edits(a.notes, notes_file=True) if Path(a.notes).is_file() else [])
+        keep.append(sign(n, amap, unsigned))
+    kept = {n["id"] for n in keep}
+    src_r = a.replies or sibling(a.notes, "replies")
+    replies = load_replies(src_r) if src_r else (load_replies(a.notes, notes_file=True) if Path(a.notes).is_file() else [])
+    replies = [sign({k: v for k, v in r.items() if k != "authorId"}, amap, unsigned) for r in replies if r.get("note") in kept]
+    src_e = a.edits or sibling(a.notes, "edits")
+    edits = load_edits(src_e) if src_e else (load_edits(a.notes, notes_file=True) if Path(a.notes).is_file() else [])
     for e in edits:
         e.pop("history", None)
         au = e.get("author") or ""
@@ -149,10 +185,11 @@ def main():
         elif not au and e.get("authorName"):
             e["author"] = e["authorName"]
         e.pop("authorName", None)
-    html = fill(tpl, a.doc_dir, a.doc_name, a.title).replace("__STATIC__", J({"notes": keep, "edits": edits, "date": a.date}))
+    html = fill(tpl, a.doc_dir, a.doc_name, a.title).replace("__STATIC__", J({"notes": keep, "edits": edits, "replies": replies, "date": a.date}))
     Path(a.out).write_text(html)
     from collections import Counter
-    print(f"wrote {a.out} ({len(html) / 1e6:.2f} MB): {len(keep)} notes, {len(edits)} text edits, authors {dict(Counter(n.get('author', '') for n in keep))}")
+    print(f"wrote {a.out} ({len(html) / 1e6:.2f} MB): {len(keep)} notes, {len(replies)} replies, {len(edits)} text edits, "
+          f"authors {dict(Counter(n.get('author', '') for n in keep))}")
     if unsigned:
         print(f"note: {len(unsigned)} notes are signed by account name and the report cannot look names up, so they show "
               f"\"Page owner\" / \"Reviewer\". Build from the page's Export JSON (it carries the names), or map them: "
