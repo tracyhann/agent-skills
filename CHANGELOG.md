@@ -7,6 +7,18 @@ CI, docs) are listed under "Repository" at the end.
 
 ## manuscript-review-annotator
 
+### 1.4.0 — 2026-09-29
+- "Export HTML" in the page: one click downloads a standalone, read-only copy of the paper with
+  every note (except dismissed ones), reply thread and text edit, with account-signed items
+  named as the exporter sees them, so it opens offline in any browser and reads the same for
+  anyone.
+- Report mode is part of the page (`window.REVIEW_SNAPSHOT`); `build_html.py report` injects the
+  same snapshot instead of patching the template, so the two kinds of report cannot drift apart.
+- "Export report" is now "Export Markdown"; a report opened from disk saves its JSON and Markdown
+  exports with a plain browser download.
+- `smoke_test.py --exercise-report` exports the report, opens it offline and checks it; a test
+  exports one through the downloads capability of a stand-in page runtime and checks the names.
+
 ### 1.3.0 — 2026-09-29
 - Signatures follow whoever is using the skill or the page. "Signing as" in the page's toolbar
   lets each person set a signature for their session (kept until the tab closes); otherwise

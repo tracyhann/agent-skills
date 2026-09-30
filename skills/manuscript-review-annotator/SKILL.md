@@ -4,7 +4,7 @@ description: Review a research manuscript (Word .docx, LaTeX source or PDF) thor
 license: MIT
 compatibility: Python 3.10+ with pandoc, beautifulsoup4, lxml, pillow, pdfplumber and pypdfium2 (see requirements.txt); playwright for smoke tests. The live page needs the Artifact publishing tool (claude.ai); elsewhere deliver the standalone report.
 metadata:
-  version: "1.3.0"
+  version: "1.4.0"
 ---
 
 # Manuscript review annotator
@@ -114,10 +114,11 @@ python scripts/smoke_test.py /mnt/user-data/outputs/<stem>_review.html --notes /
 ```
 The smoke test must print OK (no JavaScript errors, no unmatched quotes). Look at the
 screenshot. Pass `--replies seed/replies.json` when the draft had replies. After any change to
-the template, also run it with `--exercise-edits --exercise-comments`: they edit a paragraph,
-apply a suggestion (including one in a table), open a note's "Edit text", sign for the session,
-post, edit, search and delete a reply, reload, and push hostile HTML through the sanitizer and
-the reply box; every check must print PASS.
+the template, also run it with `--exercise-edits --exercise-comments --exercise-report`: they
+edit a paragraph, apply a suggestion (including one in a table), open a note's "Edit text", sign
+for the session, post, edit, search and delete a reply, reload, push hostile HTML through the
+sanitizer and the reply box, and export a standalone report and open it offline; every check
+must print PASS.
 
 ### 5. Publish and seed
 
@@ -135,11 +136,12 @@ Reply briefly, in prose: what the review found at the highest level (the few iss
 most), how many notes by category, and how to use the page (select text to highlight or
 comment, "Box on figure" to draw on figures, "Reply" to discuss a note, "Edit text" to change
 the manuscript and tick the notes an edit addresses, "Apply" on a suggestion, "Show changes" for
-tracked changes, notes, replies and edits save automatically, export buttons). Say how the notes are signed, and that everyone
-signs with their own account name unless they set a different signature for their session with
-"Signing as" in the toolbar. Mention that it is private until shared and can be shared within
-the organization. Do not paste the full list of notes into the chat; the page is
-the deliverable.
+tracked changes, notes, replies and edits save automatically, "Export HTML" for a standalone
+read-only copy anyone can open offline, JSON and Markdown exports). Say how the notes are
+signed, and that everyone signs with their own account name unless they set a different
+signature for their session with "Signing as" in the toolbar. Mention that it is private until
+shared and can be shared within the organization. Do not paste the full list of notes into the
+chat; the page is the deliverable.
 
 ## Later requests on the same page
 
@@ -148,14 +150,14 @@ Read `references/artifact_ops.md` for the exact calls.
 | User says | Do |
 |---|---|
 | "I finished reviewing; delete dismissed ones, keep the open ones in a clean source" | read notes back, `notes_ops.py batch --delete-status dismissed`, write_db, `notes_ops.py clean` → present .md and .json |
-| "Make a standalone report / bake the comments in" | read notes back, `build_html.py report` with author mapping, smoke test, present the file |
+| "Make a standalone report / bake the comments in" | point them to "Export HTML" in the page: one click, notes (except dismissed), replies, edits and account names as they see them. When Claude must build it (from read_db, or with relabelled names): `build_html.py report` with author mapping, smoke test, present the file |
 | "Sign them as X" / "use my account name" | `notes_ops.py batch --relabel "old=X"` in the live tool (`"=X"` signs Claude's unsigned notes; `"X="` returns them to the account name); also rebuild any report; replies: the same on `_notes/replies` with `--collection replies`. For their own future notes and replies, point them to "Signing as" |
 | "Add the rebuttal / the authors' answers to the reviewer notes" | draft them as `"replies"` on those notes (quote or summarise the source), validate, write the reply batch; on a published page, see artifact_ops.md section 2 |
 | "Change a colour / default / layout" | edit the template, rebuild, republish with the same `url` |
 | "Where is this stored? Who can see it? Do invitees' names show?" | answer from artifact_ops.md section 6 |
 | "Apply the edits from the page to my LaTeX / Overleaf project" | read the `edits` collection back, run `apply_edits.py DOC_DIR <edits dir> <project> OUT`, present `apply_report.md`, `changes.diff` and the changed files; say which changes need a manual fix and why (artifact_ops.md section 7) |
 | "Apply the edits / accepted suggestions to the Word file" | read the `edits` collection back, run `apply_edits.py` for `hunks.json` (before/after with context), then write them into the .docx as tracked changes following the docx skill |
-| "What did we change?" / "Undo that edit" | Export report lists every text edit with its diff; in the page, open the block, "Use original", Save. Each edit keeps its last 10 versions in `history` if an older one is needed |
+| "What did we change?" / "Undo that edit" | Export Markdown lists every text edit with its diff; in the page, open the block, "Use original", Save. Each edit keeps its last 10 versions in `history` if an older one is needed |
 
 ## LaTeX projects
 

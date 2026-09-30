@@ -3,7 +3,7 @@
 Load a built page in headless Chromium and check it before publishing or sending.
 
     python smoke_test.py PAGE.html [--notes seeds.json] [--edits edits.json] [--replies replies.json]
-                         [--shot out.png] [--exercise-edits] [--exercise-comments]
+                         [--shot out.png] [--exercise-edits] [--exercise-comments] [--exercise-report]
 
 --notes / --edits / --replies inject notes, text edits and reply threads into the tool's
 browser-storage fallback so the live tool can be checked without the artifact database (reports
@@ -15,11 +15,14 @@ reload keeps it, delete it, and go back to the account name.
 session with "Signing as", edit a paragraph and save, check tracked changes and the "Show changes" toggle, apply a suggestion, open a note's
 "Edit text", reload and confirm everything persisted, and run hostile HTML through the
 sanitizer. Use it after changing the template.
+--exercise-report clicks "Export HTML", opens the downloaded file from disk with the network cut
+off, and checks it runs read-only, without errors, with every note (except dismissed ones),
+reply and text edit, and without the editing controls.
 Fails (exit 1) on JavaScript errors, on any note whose quoted text no longer matches (notes whose
 text was changed by an edit are fine), or on a failed editing check.
 Requires playwright + chromium.
 """
-import argparse, functools, http.server, json, re, socketserver, sys, threading
+import argparse, functools, http.server, json, re, socketserver, sys, tempfile, threading
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
@@ -193,12 +196,49 @@ def exercise_comments(pg, ls_key):
     return checks, fails
 
 
+def exercise_report(pg):
+    """Export HTML from the tool, open the file offline, check it; returns (checks, failures)."""
+    checks, fails = {}, []
+
+    def check(name, ok, detail=""):
+        checks[name] = bool(ok)
+        if not ok:
+            fails.append(f"{name}: {detail}")
+
+    want = pg.evaluate("""() => { const kept = new Set([...S.anns.values()].filter(a => a.status !== 'dismissed').map(a => a.id));
+      return { notes: kept.size, replies: [...S.replies.values()].filter(r => kept.has(r.note)).length, edits: S.edits.size }; }""")
+    with pg.expect_download() as info:
+        pg.click("#exportHtml")
+    path = Path(tempfile.mkdtemp()) / info.value.suggested_filename
+    info.value.save_as(path)
+    check("Export HTML downloads one standalone file", path.suffix == ".html" and path.stat().st_size > 2000, path.name)
+    ctx = pg.context.browser.new_context(viewport={"width": 1280, "height": 800})
+    ctx.route("**/*", lambda r: r.continue_() if r.request.url.startswith("file:") else r.abort())
+    rp = ctx.new_page()
+    errs = []
+    rp.on("pageerror", lambda e: errs.append(str(e)))
+    rp.goto(path.as_uri())
+    rp.wait_for_timeout(1500)
+    got = rp.evaluate("""() => { const gone = q => { const el = document.querySelector(q); return !el || el.hidden || !el.offsetParent; };   // hidden itself or inside a hidden group
+      return { readOnly: document.body.classList.contains('report'), notes: S.anns.size, replies: S.replies.size, edits: S.edits.size,
+        title: document.title, hidden: ['#exportHtml', '#modeEdit', '#importBtn', '#addGeneral', '#sigBtn'].every(gone),
+        replyButtons: document.querySelectorAll('[data-act="reply"]').length }; }""")
+    ctx.close()
+    check("the report opens offline without errors", not errs and got["readOnly"], {"errors": errs[:2], **got})
+    check("the report carries every note, reply and text edit", (got["notes"], got["replies"], got["edits"]) == (want["notes"], want["replies"], want["edits"]),
+          {"want": want, "got": got})
+    check("the report has no editing, signing or reply controls", got["hidden"] and got["replyButtons"] == 0, got)
+    check("the report is titled as a snapshot", got["title"].endswith("(snapshot)"), got["title"])
+    return checks, fails
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("page"); ap.add_argument("--notes"); ap.add_argument("--edits"); ap.add_argument("--shot")
     ap.add_argument("--replies")
     ap.add_argument("--exercise-edits", action="store_true")
     ap.add_argument("--exercise-comments", action="store_true")
+    ap.add_argument("--exercise-report", action="store_true")
     a = ap.parse_args()
     page = Path(a.page).resolve()
     html = page.read_text()
@@ -221,7 +261,7 @@ def main():
         init += "sessionStorage.setItem('seeded', '1'); }"
     with sync_playwright() as p:
         b = p.chromium.launch()
-        ctx = b.new_context(viewport={"width": 1440, "height": 900})
+        ctx = b.new_context(viewport={"width": 1440, "height": 900}, accept_downloads=True)
         ctx.route("**/fonts.googleapis.com/**", lambda r: r.abort())
         pg = ctx.new_page()
         errs = []
@@ -250,6 +290,9 @@ def main():
             c2, f2 = exercise_comments(pg, ls_key)
             checks.update(c2); fails += f2
             r = pg.evaluate(STATE_JS)
+        if a.exercise_report:
+            c3, f3 = exercise_report(pg)
+            checks.update(c3); fails += f3
         if a.shot:
             pg.screenshot(path=a.shot)
         b.close()

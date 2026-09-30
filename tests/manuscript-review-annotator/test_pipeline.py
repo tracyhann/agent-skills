@@ -30,6 +30,11 @@ def run(*args):
     return r.stdout
 
 
+def static_of(html):
+    """The notes, edits and replies baked into a read-only report."""
+    return json.loads(html.split("<script>window.REVIEW_SNAPSHOT = ", 1)[1].split(";</script>", 1)[0])
+
+
 def have_browser():
     try:
         from playwright.sync_api import sync_playwright
@@ -105,7 +110,8 @@ def test_pipeline(fixture, tmp_path, browser_ok):
         out = run(SCRIPTS / "smoke_test.py", report)
         assert "readOnly: True" in out and "signingAs: None" in out and "replies: 1" in out
         out = run(SCRIPTS / "smoke_test.py", tool, "--notes", seed / "seeds.json", "--replies", seed / "replies.json",
-                  "--exercise-edits", "--exercise-comments")
+                  "--exercise-edits", "--exercise-comments", "--exercise-report")
+        assert "PASS  the report carries every note, reply and text edit" in out
         assert "OK" in out and "FAIL" not in out and "PASS  Apply replaces the quoted text" in out
         assert "PASS  reply is posted and signed" in out and "PASS  reply text is shown as text, never HTML" in out
 
@@ -207,7 +213,7 @@ def test_signatures_default_to_the_account_name(tmp_path):
     report = tmp_path / "report.html"
     out = run(SCRIPTS / "build_html.py", "report", doc, live, report, "--doc-name", "sample.docx",
               "--author-map", "@owner=cabbage")
-    static = json.loads(report.read_text().split("const STATIC = ", 1)[1].split(";\n", 1)[0].replace("<\\/", "</"))
+    static = static_of(report.read_text())
     by = {n["id"]: n["author"] for n in static["notes"]}
     assert [by[n["id"]] for n in seeds] == ["cabbage", "cabbage"]
     assert by["u1"] == "Alex" and by["u2"] == "Reviewer" and "1 notes are signed by account name" in out
@@ -232,7 +238,7 @@ def test_report_reply_threads(tmp_path):
     }))
     report = tmp_path / "report.html"
     out = run(SCRIPTS / "build_html.py", "report", doc, export, report, "--doc-name", "sample.docx", "--author-map", "@owner=Kim Test")
-    static = json.loads(report.read_text().split("const STATIC = ", 1)[1].split(";\n", 1)[0].replace("<\\/", "</"))
+    static = static_of(report.read_text())
     assert [(r["id"], r["author"]) for r in static["replies"]] == [("c1", "Alex"), ("c2", "Sam Sample"), ("c3", "Kim Test")]
     assert not any("authorId" in r or "authorName" in r for r in static["replies"])
     assert "3 replies" in out
@@ -254,3 +260,74 @@ def test_invalid_anchor_is_rejected(tmp_path):
     r = subprocess.run([sys.executable, SCRIPTS / "validate_notes.py", doc, draft, tmp_path / "s", "--author", "t"],
                        capture_output=True, text=True)
     assert r.returncode == 1 and "not found" in r.stdout
+
+
+MOCK_RUNTIME = """(() => {
+  const V = %s;
+  const store = { annotations: new Map(Object.entries(V.notes)), replies: new Map(Object.entries(V.replies)), edits: new Map(),
+                  editlocks: new Map(), meta: new Map(V.owner ? [['owner', { id: V.owner }]] : []) };
+  window.__writes = [];
+  const snap = c => ({ docs: [...(store[c] || new Map()).entries()].map(([id, v]) => ({ id, exists: true, data: () => v, metadata: {} })) });
+  const ref = (c, id) => ({
+    get: async () => ({ id, exists: store[c].has(id), data: () => store[c].get(id), metadata: {} }),
+    set: async d => { window.__writes.push([c, id, d]); store[c].set(id, d); },
+    update: async () => {}, delete: async () => {}, acquire: async () => ({ release: async () => {}, renew: async () => {} }),
+  });
+  const db = { collection: c => ({ onSnapshot: cb => { setTimeout(() => cb(snap(c)), 0); return () => {}; }, doc: id => ref(c, id) }),
+               doc: path => ref(...path.split('/')) };
+  const user = {
+    me: async () => ({ id: V.me, name: V.names[V.me] || '', isOwner: V.me === 'u_owner', canEdit: true, avatarUrl: '', color: '#888', email: null }),
+    id: async () => V.me, can: async () => true, isOwner: async () => V.me === 'u_owner',
+    profiles: async ids => Object.fromEntries([].concat(ids).map(i => [i, { id: i, name: V.names[i] || '', isMe: i === V.me }])),
+  };
+  const downloads = { save: async ({ filename, data }) => { window.__saved = { filename, data: typeof data === 'string' ? data : await data.text() }; } };
+  window.claude = { use: async n => n === 'db' ? db : n === 'user' ? user : n === 'downloads' ? downloads : null };
+})();"""
+
+
+@pytest.mark.skipif(shutil.which("pandoc") is None, reason="pandoc not installed")
+def test_signatures_in_the_live_page(tmp_path, browser_ok):
+    """Against a stand-in for the page runtime: each kind of signature shows the right name, only the
+    owner records meta/owner, and one click exports a report that still names everyone offline."""
+    if not browser_ok:
+        pytest.skip("playwright/chromium not available")
+    from playwright.sync_api import sync_playwright
+    doc = tmp_path / "doc"
+    run(SCRIPTS / "extract.py", FIX / "sample.docx", doc)
+    tool = tmp_path / "tool.html"
+    run(SCRIPTS / "build_html.py", "tool", doc, tool, "--doc-name", "sample.docx")
+    note = lambda i, **k: {"id": i, "kind": "note", "cat": "mine", "comment": i, "status": "open", "seq": int(i[1:]), **k}
+    notes = {"n1": note("n1", author="", byOwner=True),                        # Claude, unsigned
+             "n2": note("n2", author="cabbage"),                               # Claude, signed
+             "n3": note("n3", author="Alex", authorId="u_alex"),               # session signature
+             "n4": note("n4", author="", authorId="u_sam")}                    # account name
+    replies = {"c1": {"id": "c1", "note": "n1", "text": "ok", "author": "", "authorId": "u_sam", "createdAt": "2026-09-29T10:00:00Z"}}
+    names = {"u_owner": "Owner Name", "u_alex": "Alex Account", "u_sam": "Sam Account"}
+    want = {"n1": "Owner Name", "n2": "cabbage", "n3": "Alex", "n4": "Sam Account"}
+    labels = """() => ({ by: Object.fromEntries([...document.querySelectorAll('.note')].map(n => [n.dataset.id, n.querySelector('footer .by').textContent])),
+                        reply: document.querySelector('.reply .who').textContent, report: document.body.classList.contains('report') })"""
+    with sync_playwright() as p:
+        b = p.chromium.launch()
+        for me, owner_doc in (("u_owner", None), ("u_sam", "u_owner")):
+            pg = b.new_page(); errs = []
+            pg.on("pageerror", lambda e: errs.append(str(e)))
+            pg.route("**/fonts.googleapis.com/**", lambda r: r.abort())
+            pg.add_init_script(MOCK_RUNTIME % json.dumps({"notes": notes, "replies": replies, "names": names, "me": me, "owner": owner_doc}))
+            pg.goto(tool.as_uri()); pg.wait_for_timeout(1500)
+            got = pg.evaluate(labels)
+            assert not errs, errs
+            assert got == {"by": want, "reply": "Sam Account", "report": False}, got
+            assert len(pg.evaluate("window.__writes.filter(w => w[0] === 'meta')")) == (1 if me == "u_owner" else 0)
+            if me == "u_sam":
+                pg.click("#exportHtml"); pg.wait_for_timeout(800)
+                saved = pg.evaluate("window.__saved")
+                assert saved and saved["filename"].endswith(".html")
+                report = tmp_path / saved["filename"]
+                report.write_text(saved["data"])
+                rp = b.new_page()
+                rp.route("**/*", lambda r: r.continue_() if r.request.url.startswith("file:") else r.abort())
+                rp.goto(report.as_uri()); rp.wait_for_timeout(1200)
+                assert rp.evaluate(labels) == {"by": want, "reply": "Sam Account", "report": True}
+                rp.close()
+            pg.close()
+        b.close()
