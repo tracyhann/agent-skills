@@ -365,7 +365,9 @@ const IMGS = __IMGS__;
 const STATIC = window.REVIEW_SNAPSHOT || null;
 // The page's own parts, captured before anything renders, so "Export HTML" can write a copy of it.
 const SHELL = {
-  head: [...document.head.children].filter(el => el.matches('meta, title, style, link[href^="https://fonts."]')).map(el => el.outerHTML).join('\n'),
+  // Styles are collected from the whole document: inside the artifact viewer the page is wrapped in the
+  // viewer's own document, and the browser moves this page's <style> and font links into <body>.
+  head: [...document.querySelectorAll('meta[charset], meta[name="viewport"], title, style, link[href^="https://fonts."]')].map(el => el.outerHTML).join('\n'),
   body: [...document.body.children].filter(el => el.hasAttribute('data-shell')).map(el => el.outerHTML).join('\n'),
   js: document.currentScript ? document.currentScript.textContent : '',
 };

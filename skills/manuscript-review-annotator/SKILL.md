@@ -4,7 +4,7 @@ description: Review a research manuscript (Word .docx, LaTeX source or PDF) thor
 license: MIT
 compatibility: Python 3.10+ with pandoc, beautifulsoup4, lxml, pillow, pdfplumber and pypdfium2 (see requirements.txt); playwright for smoke tests. The live page needs the Artifact publishing tool (claude.ai); elsewhere deliver the standalone report.
 metadata:
-  version: "1.4.0"
+  version: "1.4.1"
 ---
 
 # Manuscript review annotator
@@ -190,3 +190,8 @@ pandoc covers most papers, but these showed up on a real project and silently lo
   cells, emptying the cell. The range helper now starts inside the containing text node, and a
   suggestion that spans cells opens the editor instead; the smoke test guards this.
 - Edits are HTML that other viewers render: keep the sanitizer on both save and display.
+- "Export HTML" once copied styles only from the page's `<head>`. The artifact viewer serves the
+  page inside its own document, the browser moves the page's stylesheet into `<body>`, and every
+  report exported from a published page came out unstyled. The page now collects styles from
+  the whole document, and `smoke_test.py --exercise-report` also exports from a viewer-style
+  wrapper; a local test of the bare page does not show this.
